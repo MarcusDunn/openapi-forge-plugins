@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "generator-rust-tower"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "forge-plugin-sdk",
  "serde",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "transformer-filter-operations"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "forge-plugin-sdk",
  "serde",

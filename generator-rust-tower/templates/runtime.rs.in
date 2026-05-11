@@ -4,6 +4,8 @@
 // generated module is self-contained: no upstream runtime crate to publish or
 // version.
 
+#![allow(clippy::all, clippy::pedantic, clippy::nursery)]
+
 use std::future::Future;
 
 /// One operation in the API. Implemented per-operation alongside this module.

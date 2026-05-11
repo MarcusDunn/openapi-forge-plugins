@@ -4,7 +4,16 @@
 // this in as `pub mod gen;` (or any other module name) and uses
 // `gen::{execute, Operation}` plus the per-operation submodules.
 
-#![allow(clippy::module_inception, clippy::large_enum_variant, clippy::needless_lifetimes, dead_code, unused_imports)]
+#![allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::module_inception,
+    clippy::large_enum_variant,
+    clippy::needless_lifetimes,
+    dead_code,
+    unused_imports
+)]
 
 pub mod runtime;
 pub mod models;
