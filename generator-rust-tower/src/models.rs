@@ -30,6 +30,17 @@ pub fn render(spec: &ir::Ir) -> String {
 }
 
 fn render_named(out: &mut String, spec: &ir::Ir, named: &ir::NamedType) {
+    // The parser hoists per-property bodies into named types (the
+    // `Schemas<Type>Property<Field>` family). They never become useful Rust
+    // aliases — they'd just be `pub type X = String;` namespace pollution —
+    // and the field that birthed them inlines the primitive at the use site
+    // via `type_ref_to_rust`. Skip them. Same idea for primitive aliases
+    // and unmodelable unions / arrays: when the alias's RHS is something
+    // the use site can emit inline just as easily, no alias is needed.
+    if !should_emit_named(named) {
+        return;
+    }
+
     let name = naming::rust_type_name(named);
     if let Some(doc) = &named.documentation {
         for line in doc.lines() {
@@ -42,17 +53,11 @@ fn render_named(out: &mut String, spec: &ir::Ir, named: &ir::NamedType) {
         ir::TypeDef::Object(o) => render_struct(out, spec, &name, o),
         ir::TypeDef::EnumString(e) => render_string_enum(out, &name, e),
         ir::TypeDef::EnumInt(e) => render_int_enum(out, &name, e),
-        ir::TypeDef::Primitive(p) => {
-            out.push_str(&format!(
-                "pub type {name} = {};\n",
-                crate::types::type_ref_to_rust(spec, &named.id, MODELS_PATH_INSIDE,).replace(
-                    &format!("{MODELS_PATH_INSIDE}::{name}"),
-                    &super_primitive(p)
-                )
-            ));
-        }
-        ir::TypeDef::Array(_) | ir::TypeDef::Union(_) => {
-            // Inline → emit as alias.
+        // Primitives, arrays, unions: `should_emit_named` returned `true`
+        // (the named type isn't trivially inlineable), so emit the alias.
+        // The Array branch also handles top-level arrays from
+        // `components/schemas`.
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Union(_) => {
             let rhs = type_ref_to_rust(spec, &named.id, MODELS_PATH_INSIDE);
             out.push_str(&format!("pub type {name} = {rhs};\n"));
         }
@@ -60,13 +65,29 @@ fn render_named(out: &mut String, spec: &ir::Ir, named: &ir::NamedType) {
     }
 }
 
-fn super_primitive(p: &ir::PrimitiveType) -> String {
-    // Used only for the alias rendering path above; mirror types.rs.
-    match p.kind {
-        ir::PrimitiveKind::String => "String".to_string(),
-        ir::PrimitiveKind::Integer => "i64".to_string(),
-        ir::PrimitiveKind::Number => "f64".to_string(),
-        ir::PrimitiveKind::Bool => "bool".to_string(),
+/// Decide whether a `NamedType` earns its keep as a `pub type X = ...;`
+/// or `pub struct X { ... }` in `models.rs`.
+///
+/// We skip:
+/// - synthesized per-property aliases (objects with only
+///   `additionalProperties`, primitive-aliased properties): the parent
+///   field inlines the same expression at the use site
+/// - primitive aliases that came from a synthetic hoisting (anything whose
+///   `original_name` is `None` and whose definition is a leaf primitive)
+fn should_emit_named(named: &ir::NamedType) -> bool {
+    match &named.definition {
+        // Objects: keep unless it's the "additionalProperties-only" map
+        // shape (we inline to `HashMap` at the use site).
+        ir::TypeDef::Object(o) => crate::types::additional_properties_only(o).is_none(),
+        // Named enums always pull their weight (they're a discrete type).
+        ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) => true,
+        // Synthesized primitive / array / union aliases (no `original_name`)
+        // are parser bookkeeping. Skip — `type_ref_to_rust` inlines the
+        // same expression wherever they're used.
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Union(_) => {
+            named.original_name.is_some()
+        }
+        ir::TypeDef::Null => false,
     }
 }
 

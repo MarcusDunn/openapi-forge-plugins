@@ -1,7 +1,10 @@
 //! IR `TypeRef` / `TypeDef` → Rust type expression.
 //!
 //! Conservative: anything we can't model faithfully falls back to
-//! `serde_json::Value` with a `// TODO` comment so the spec author notices.
+//! `serde_json::Value`. We used to inline `/* TODO ... */` comments at the
+//! type position; reviewers correctly pointed out this is the worst of both
+//! worlds — code compiles, "looks fine," silently lossy. Use diagnostics or
+//! refuse to emit instead.
 
 use forge_plugin_sdk::ir;
 
@@ -14,19 +17,22 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &str) -> Str
         return "serde_json::Value".to_string();
     }
     let Some(named) = spec.types.iter().find(|t| t.id == type_ref) else {
-        return format!("serde_json::Value /* TODO unknown type ref `{type_ref}` */");
+        return "serde_json::Value".to_string();
     };
     match &named.definition {
-        // Named types we emit as `struct` / `enum` resolve to a name under
-        // `models::`. When `models_path` is empty, callers are *inside*
-        // `models.rs` and sibling types resolve by bare name.
-        ir::TypeDef::Object(_) | ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) => {
-            let name = naming::rust_type_name(named);
-            if models_path.is_empty() {
-                name
-            } else {
-                format!("{models_path}::{name}")
+        ir::TypeDef::Object(o) => {
+            // Objects with only `additionalProperties` and no named fields
+            // are maps. Inline them as `HashMap<String, T>` at the use site
+            // — emitting a one-field newtype struct forces every caller
+            // through a `.additional.get(...)` dance for no semantic gain.
+            if let Some(value_ty) = additional_properties_only(o) {
+                let inner = type_ref_to_rust(spec, value_ty, models_path);
+                return format!("std::collections::HashMap<String, {inner}>");
             }
+            named_type_path(models_path, &naming::rust_type_name(named))
+        }
+        ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) => {
+            named_type_path(models_path, &naming::rust_type_name(named))
         }
         ir::TypeDef::Primitive(p) => primitive_to_rust(p),
         ir::TypeDef::Array(a) => {
@@ -34,6 +40,31 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &str) -> Str
         }
         ir::TypeDef::Union(u) => union_to_rust(spec, u, models_path),
         ir::TypeDef::Null => "serde_json::Value".to_string(),
+    }
+}
+
+fn named_type_path(models_path: &str, name: &str) -> String {
+    if models_path.is_empty() {
+        name.to_string()
+    } else {
+        format!("{models_path}::{name}")
+    }
+}
+
+/// Detect "this object has no named properties; it's just a typed map."
+/// Returns the value `TypeRef` if so.
+///
+/// The JSON-Schema shape is `{ "type": "object", "additionalProperties": <X> }`
+/// with no `properties`. We translate that to `HashMap<String, X>` at the
+/// use site (see [`type_ref_to_rust`]) so callers don't have to walk through
+/// a one-field newtype.
+pub fn additional_properties_only(o: &ir::ObjectType) -> Option<&str> {
+    if !o.properties.is_empty() {
+        return None;
+    }
+    match &o.additional_properties {
+        ir::AdditionalProperties::Typed { r#type } => Some(r#type.as_str()),
+        _ => None,
     }
 }
 
@@ -58,7 +89,7 @@ fn primitive_to_rust(p: &ir::PrimitiveType) -> String {
 }
 
 /// `T | null` (the only union shape this generator models faithfully)
-/// becomes `Option<T>`. Everything else is `serde_json::Value` + TODO.
+/// becomes `Option<T>`. Everything else is `serde_json::Value`.
 fn union_to_rust(spec: &ir::Ir, u: &ir::UnionType, models_path: &str) -> String {
     if u.variants.len() == 2 {
         let null_pos = u.variants.iter().position(|v| v.r#type == ir::NULL_ID);
@@ -73,8 +104,5 @@ fn union_to_rust(spec: &ir::Ir, u: &ir::UnionType, models_path: &str) -> String 
             };
         }
     }
-    format!(
-        "serde_json::Value /* TODO union (variants: {}) */",
-        u.variants.len()
-    )
+    "serde_json::Value".to_string()
 }

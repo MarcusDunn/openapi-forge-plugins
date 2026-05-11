@@ -46,12 +46,14 @@ fn render_request_struct(out: &mut String, spec: &ir::Ir, op: &ir::Operation, na
     out.push_str("#[derive(Debug, Clone)]\n");
     out.push_str(&format!("pub struct {name} {{\n"));
     for p in &op.path_params {
-        // Path params are always `String` regardless of the spec's declared
-        // type. They get stringified into the URL via `format!`; accepting
-        // `String` is far more ergonomic than forcing the caller to hand
-        // the generated code an `f64` for a campaignId.
+        // Path params keep their IR-derived type. The reviewer rightly
+        // pointed out that hard-coding `String` covered for a spec bug
+        // (`type: number` with no format) by hiding the symptom. Fix the
+        // spec and the type comes out correct (`i32`/`i64` for integers,
+        // `String` for strings).
         let field = naming::snake_case(&p.name);
-        out.push_str(&format!("    pub {field}: String,\n"));
+        let ty = type_ref_to_rust(spec, &p.r#type, MODELS_PATH);
+        out.push_str(&format!("    pub {field}: {ty},\n"));
     }
     for p in &op.query_params {
         let field = naming::snake_case(&p.name);

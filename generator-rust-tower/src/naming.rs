@@ -67,39 +67,30 @@ pub fn snake_case(s: &str) -> String {
     escape_keyword(out)
 }
 
-/// `camelCase` / `kebab-case` / `snake_case` → `PascalCase`. Used for type
-/// and variant names.
+/// `camelCase` / `kebab-case` / `snake_case` → `PascalCase`.
+///
+/// Splits into words on:
+/// - non-alphanumeric punctuation (`_-./ `)
+/// - lower/digit → upper (`getUser` → `get`, `User`)
+/// - upper → upper+lower (`HTTPClient` → `HTTP`, `Client`)
+/// - upper → upper followed by a digit (`JSONV2` → `JSON`, `V2`)
+/// - letter → digit (`v2` → `v`, `2`)
+///
+/// Each word is title-cased, so the third and fourth rules together turn
+/// `updatePhoneManifestWithJSONV2` into `UpdatePhoneManifestWithJsonV2`
+/// (not `Jsonv2`, which is the worst of both worlds).
 pub fn pascal_case(s: &str) -> String {
     if s.is_empty() {
         return "_".to_string();
     }
     let mut out = String::with_capacity(s.len());
-    let mut next_upper = true;
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' || c == '-' || c == ' ' || c == '.' || c == '/' {
-            next_upper = true;
-            continue;
-        }
-        if !c.is_ascii_alphanumeric() {
-            // Drop punctuation; the next valid char starts a new segment.
-            next_upper = true;
-            continue;
-        }
-        if i > 0 && c.is_ascii_uppercase() {
-            // Preserve existing boundaries (e.g. `getUser` → `GetUser`,
-            // `JSONBody` → `JsonBody` — we don't try to preserve acronyms
-            // in caps, which matches `heck` and most generators).
-            let prev = chars.get(i - 1).copied();
-            if matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit()) {
-                next_upper = true;
+    for word in split_into_words(s) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.push(first.to_ascii_uppercase());
+            for c in chars {
+                out.push(c.to_ascii_lowercase());
             }
-        }
-        if next_upper {
-            out.push(c.to_ascii_uppercase());
-            next_upper = false;
-        } else {
-            out.push(c.to_ascii_lowercase());
         }
     }
     if out.is_empty() {
@@ -109,6 +100,53 @@ pub fn pascal_case(s: &str) -> String {
         out.insert(0, '_');
     }
     out
+}
+
+fn split_into_words(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if !c.is_ascii_alphanumeric() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        if !current.is_empty() {
+            let prev = chars[i - 1];
+            let next = chars.get(i + 1).copied();
+            let split = boundary(prev, c, next);
+            if split {
+                words.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(c);
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn boundary(prev: char, curr: char, next: Option<char>) -> bool {
+    let prev_upper = prev.is_ascii_uppercase();
+    let prev_lower_or_digit = prev.is_ascii_lowercase() || prev.is_ascii_digit();
+    let curr_upper = curr.is_ascii_uppercase();
+    let curr_digit = curr.is_ascii_digit();
+    let next_lower = matches!(next, Some(n) if n.is_ascii_lowercase());
+    let next_digit = matches!(next, Some(n) if n.is_ascii_digit());
+
+    // 1. lower/digit → upper: `getId` → `get`, `Id`
+    (prev_lower_or_digit && curr_upper)
+        // 2. upper → upper followed by lower: `HTTPClient` → `HTTP`, `Client`
+        || (prev_upper && curr_upper && next_lower)
+        // 3. trailing upper before a digit ends an acronym run: `JSONV2`
+        //    → `JSON`, `V2` (split before `V`, not after it). Without this,
+        //    `JSONV` swallows `V` and the result reads as `Jsonv2`.
+        || (prev_upper && curr_upper && next_digit)
+        // 4. letter → digit: `V2` → `V`, `2`; `version2` → `version`, `2`
+        || (prev.is_ascii_alphabetic() && curr_digit)
 }
 
 /// Rust type / variant name for an IR `NamedType`. Prefer the spec's
@@ -182,5 +220,19 @@ mod tests {
         assert_eq!(pascal_case("get-user"), "GetUser");
         assert_eq!(pascal_case("ALREADY_PASCAL"), "AlreadyPascal");
         assert_eq!(pascal_case("1leading"), "_1leading");
+    }
+
+    #[test]
+    fn pascal_acronyms_and_versions() {
+        // The acronym + digit suffix is the case the previous algorithm got
+        // wrong; the reviewer dubbed `Jsonv2` "the no-fly zone."
+        assert_eq!(
+            pascal_case("updatePhoneManifestWithJSONV2"),
+            "UpdatePhoneManifestWithJsonV2"
+        );
+        assert_eq!(pascal_case("HTTPClient"), "HttpClient");
+        assert_eq!(pascal_case("JSON"), "Json");
+        assert_eq!(pascal_case("JSONV2"), "JsonV2");
+        assert_eq!(pascal_case("version2"), "Version2");
     }
 }
