@@ -177,9 +177,7 @@ fn render_int_enum(out: &mut String, name: &str, e: &ir::EnumIntType) {
     out.push_str("        }\n    }\n}\n\n");
     out.push_str(&format!("impl std::convert::TryFrom<i64> for {name} {{\n"));
     out.push_str("    type Error = String;\n");
-    out.push_str(&format!(
-        "    fn try_from(v: i64) -> Result<Self, Self::Error> {{\n"
-    ));
+    out.push_str("    fn try_from(v: i64) -> Result<Self, Self::Error> {\n");
     out.push_str("        match v {\n");
     for value in &e.values {
         out.push_str(&format!(
