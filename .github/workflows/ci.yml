@@ -51,10 +51,10 @@ jobs:
     needs: build-plugins
     steps:
       - uses: actions/checkout@v4
+      # Latest stable — the forge CLI's transitive `wasmtime` pulls in
+      # crates that need rustc ≥ 1.92. Plugin builds stay pinned to 1.87
+      # in the build-plugins job above.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.87.0"
-          targets: wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - name: Download WASM artifacts
         uses: actions/download-artifact@v4
