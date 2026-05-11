@@ -1,0 +1,16 @@
+[package]
+name = "generator-rust-tower"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI Forge generator that emits a tower-based Rust client, one `impl Operation` block per operation."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["generator"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "transformer-filter-operations config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["keep"],
+  "properties": {
+    "keep": {
+      "type": "array",
+      "description": "operationIds to keep. Matched against `operation.original_id` first, falling back to `operation.id`. Operations not in this list (and named types they don't transitively reach) are dropped.",
+      "items": { "type": "string", "minLength": 1 },
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  }
+}

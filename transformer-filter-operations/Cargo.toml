@@ -1,0 +1,16 @@
+[package]
+name = "transformer-filter-operations"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI Forge transformer that keeps only a configured set of operationIds (and the named types they reach)."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["transformer"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

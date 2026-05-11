@@ -1,0 +1,9 @@
+target/
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+# Build output from the compile-test subprojects under fixtures/. Cargo
+# generates these whenever CI runs `cargo build` to verify the generator's
+# output compiles.
+fixtures/**/out/
+

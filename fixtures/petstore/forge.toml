@@ -1,0 +1,12 @@
+[input]
+spec = "spec.json"
+
+[[transformers]]
+wasm = "../../target/wasm32-wasip2/release/transformer_filter_operations.wasm"
+config = { keep = ["listPets", "createPets", "showPetById"] }
+
+[generator]
+wasm = "../../target/wasm32-wasip2/release/generator_rust_tower.wasm"
+
+[output]
+dir = "out"

@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  publish-oci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.87.0"
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+      - name: Build plugins (release, wasm32-wasip2)
+        run: cargo build --release --target wasm32-wasip2
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+        with:
+          version: 1.2.3
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | oras login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Push generator-rust-tower
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          oras push \
+            "ghcr.io/marcusdunn/generator-rust-tower:${TAG}" \
+            target/wasm32-wasip2/release/generator_rust_tower.wasm:application/vnd.bytecodealliance.wasm.component.layer.v0+wasm
+      - name: Push transformer-filter-operations
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          oras push \
+            "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" \
+            target/wasm32-wasip2/release/transformer_filter_operations.wasm:application/vnd.bytecodealliance.wasm.component.layer.v0+wasm
+      - name: Smoke-check that the OCI artifacts are pullable
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          oras manifest fetch "ghcr.io/marcusdunn/generator-rust-tower:${TAG}" > /dev/null
+          oras manifest fetch "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" > /dev/null
+      - name: Document follow-up
+        run: |
+          echo "::notice::Mark the GHCR packages as public via the repo settings UI after the first release."

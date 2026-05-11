@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "transformer-filter-operations",
+    "generator-rust-tower",
+]
+
+# Plugins target `wasm32-wasip2` only. No host-side crates here — the
+# tower runtime trait is emitted inline in each generated client (see
+# `generator-rust-tower/templates/runtime.rs.in`), so callers don't have
+# to pull a separate crate from crates.io. Plugins ship as public OCI
+# WASM components at `ghcr.io/marcusdunn/<plugin>:<tag>`.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/MarcusDunn/openapi-forge-plugins"
+
+[workspace.dependencies]
+forge-plugin-sdk = "0.1.9"
+forge-ir = "0.1.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "debuginfo"
+opt-level = "s"
