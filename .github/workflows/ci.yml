@@ -64,7 +64,7 @@ jobs:
       - name: Install forge CLI from upstream
         run: |
           cargo install --git https://github.com/marcusdunn/openapi-forge \
-            --rev 904dda29109245a146336bc0115087daab357cbf \
+            --tag v0.1.9 \
             forge-cli
       - name: Generate petstore client
         run: forge generate fixtures/petstore
