@@ -357,7 +357,9 @@ fn render_parse_response(
     out.push_str("    where\n");
     out.push_str("        B: http_body::Body + Send + 'static,\n");
     out.push_str("        B::Data: Send,\n");
-    out.push_str("        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,\n");
+    out.push_str(
+        "        B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,\n",
+    );
     out.push_str("    {\n");
     out.push_str("        let (parts, body) = resp.into_parts();\n");
     out.push_str(

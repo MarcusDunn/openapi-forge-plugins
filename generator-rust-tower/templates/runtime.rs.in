@@ -35,7 +35,7 @@ pub trait Operation: Sized {
     where
         B: http_body::Body + Send + 'static,
         B::Data: Send,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>;
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>;
 }
 
 /// Error returned by [`execute`]. Either the underlying `tower::Service`
@@ -62,7 +62,7 @@ where
     S: tower::Service<http::Request<O::RequestBody>, Response = http::Response<RespB>>,
     RespB: http_body::Body + Send + 'static,
     RespB::Data: Send,
-    RespB::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    RespB::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
 {
     use tower::ServiceExt as _;
     let req = op.into_http_request().map_err(ExecuteError::Operation)?;

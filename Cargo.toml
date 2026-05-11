@@ -12,7 +12,7 @@ members = [
 # WASM components at `ghcr.io/marcusdunn/<plugin>:<tag>`.
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 rust-version = "1.87"
 license = "Apache-2.0 OR MIT"
