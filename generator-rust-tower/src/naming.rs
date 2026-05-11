@@ -121,7 +121,6 @@ fn boundary(prev: char, curr: char, next: Option<char>) -> bool {
     let prev_upper = prev.is_ascii_uppercase();
     let prev_lower_or_digit = prev.is_ascii_lowercase() || prev.is_ascii_digit();
     let curr_upper = curr.is_ascii_uppercase();
-    let curr_digit = curr.is_ascii_digit();
     let next_lower = matches!(next, Some(n) if n.is_ascii_lowercase());
     let next_digit = matches!(next, Some(n) if n.is_ascii_digit());
 
@@ -132,9 +131,11 @@ fn boundary(prev: char, curr: char, next: Option<char>) -> bool {
         // 3. trailing upper before a digit ends an acronym run: `JSONV2`
         //    → `JSON`, `V2` (split before `V`, not after it). Without this,
         //    `JSONV` swallows `V` and the result reads as `Jsonv2`.
+        //    We deliberately don't split at letter→digit boundaries
+        //    generally: `version2` and `v2` should stay as a single token
+        //    (`Version2`/`v2`, not `Version_2`/`v_2`), which is what `heck`
+        //    and the broader Rust ecosystem do.
         || (prev_upper && curr_upper && next_digit)
-        // 4. letter → digit: `V2` → `V`, `2`; `version2` → `version`, `2`
-        || (prev.is_ascii_alphabetic() && curr_digit)
 }
 
 /// Rust type / variant name for an IR `NamedType`. Prefer the spec's
