@@ -64,9 +64,11 @@ jobs:
       - name: Install forge CLI
         # The crate is `openapi-forge-cli` (the bare `forge-cli` name was
         # already taken on crates.io); the installed binary is still `forge`.
-        # `--locked` would pin to a wasmtime version that needs rustc 1.92;
-        # let cargo resolve transitive deps compatible with our 1.87 toolchain.
-        run: cargo install openapi-forge-cli --version "^0.1.9"
+        # Override the repo's `rust-toolchain.toml` (1.87) for this step —
+        # forge-cli's transitive `wasmtime` pulls in crates that need 1.92.
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: cargo install openapi-forge-cli --version "^0.1.9" --locked
       - name: Generate petstore client
         run: forge generate fixtures/petstore
       - name: Compile generated client
