@@ -61,11 +61,10 @@ jobs:
         with:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/
-      - name: Install forge CLI from upstream
-        run: |
-          cargo install --git https://github.com/marcusdunn/openapi-forge \
-            --tag v0.1.9 \
-            forge-cli
+      - name: Install forge CLI
+        # The crate is `openapi-forge-cli` (the bare `forge-cli` name was
+        # already taken on crates.io); the installed binary is still `forge`.
+        run: cargo install openapi-forge-cli --version "^0.1.9" --locked
       - name: Generate petstore client
         run: forge generate fixtures/petstore
       - name: Compile generated client
