@@ -29,39 +29,27 @@ const RUST_KEYWORDS: &[&str] = &[
 const RUST_KEYWORDS_NO_RAW: &[&str] = &["crate", "self", "super", "Self"];
 
 /// Lower-camel / Pascal / kebab → `snake_case`. Used for `fn`/field/local
-/// names in the emitted source.
+/// names in the emitted source. Shares its word-splitting rules with
+/// [`pascal_case`] so the two stay consistent (e.g.
+/// `updatePhoneManifestWithJSONV2` → `update_phone_manifest_with_json_v2`,
+/// matching `UpdatePhoneManifestWithJsonV2` from `pascal_case`).
 pub fn snake_case(s: &str) -> String {
     if s.is_empty() {
         return "_".to_string();
     }
     let mut out = String::with_capacity(s.len() + 4);
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        let valid = c.is_ascii_alphanumeric() || c == '_';
-        if !valid {
+    for (i, word) in split_into_words(s).into_iter().enumerate() {
+        if i > 0 {
             out.push('_');
-            continue;
         }
-        if c.is_ascii_uppercase() {
-            let prev = i.checked_sub(1).map(|j| chars[j]);
-            let next = chars.get(i + 1).copied();
-            let prev_lower_or_digit =
-                matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
-            let prev_upper = matches!(prev, Some(p) if p.is_ascii_uppercase());
-            let next_lower = matches!(next, Some(n) if n.is_ascii_lowercase());
-            // Insert `_` at lower→upper boundaries, and at the end of an
-            // acronym (`URLPath` → `url_path`, not `urlp_ath`).
-            if i > 0 && (prev_lower_or_digit || (prev_upper && next_lower)) {
-                out.push('_');
-            }
+        for c in word.chars() {
             out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
         }
     }
-    // Leading digit → prefix with `_`.
-    let first = out.chars().next().unwrap_or('_');
-    if first.is_ascii_digit() {
+    if out.is_empty() {
+        return "_".to_string();
+    }
+    if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         out.insert(0, '_');
     }
     escape_keyword(out)
@@ -203,6 +191,10 @@ mod tests {
         assert_eq!(snake_case("already_snake"), "already_snake");
         assert_eq!(snake_case("kebab-case"), "kebab_case");
         assert_eq!(snake_case("with space"), "with_space");
+        assert_eq!(
+            snake_case("updatePhoneManifestWithJSONV2"),
+            "update_phone_manifest_with_json_v2"
+        );
     }
 
     #[test]
