@@ -64,11 +64,15 @@ dependencies = [
 
 [[package]]
 name = "generator-rust-tower"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "forge-plugin-sdk",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
+ "syn",
 ]
 
 [[package]]
@@ -265,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "transformer-filter-operations"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "forge-plugin-sdk",
  "serde",

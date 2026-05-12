@@ -14,7 +14,11 @@
 //!   those names.
 //! - `pascal_case` for type / variant names. Splits on case + underscore +
 //!   hyphen, capitalizes each segment.
-//! - `escape_str` for placing untrusted strings into Rust `"..."` literals.
+//!
+//! String-literal escaping (newlines, quotes, control chars) is the
+//! `quote` crate's job — when a string is interpolated via `#name`,
+//! `proc_macro2::Literal::string` produces a properly-escaped Rust
+//! literal, so we don't need a hand-rolled escaper here.
 
 const RUST_KEYWORDS: &[&str] = &[
     "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for",
@@ -155,26 +159,6 @@ fn escape_keyword(name: String) -> String {
     } else {
         name
     }
-}
-
-/// Escape a string for placement inside a Rust `"..."` literal. Conservative
-/// — only the four characters that actually break the literal get escaped.
-pub fn escape_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{{{:x}}}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]
