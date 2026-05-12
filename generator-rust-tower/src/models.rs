@@ -48,15 +48,84 @@ fn render_named(spec: &ir::Ir, named: &ir::NamedType) -> TokenStream {
         ir::TypeDef::Object(o) => render_struct(spec, &name, &docs, o),
         ir::TypeDef::EnumString(e) => render_string_enum(&name, &docs, e),
         ir::TypeDef::EnumInt(e) => render_int_enum(&name, &docs, e),
-        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Union(_) => {
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) => {
             let rhs = type_ref_to_rust(spec, &named.id, &models_path_inside());
             quote! {
                 #docs
                 pub type #name = #rhs;
             }
         }
+        ir::TypeDef::Union(u) => render_union(spec, &name, &docs, u),
         ir::TypeDef::Null => TokenStream::new(),
     }
+}
+
+/// Render a `TypeDef::Union` as either an `Option<T>` alias (the `T |
+/// null` two-variant special case) or a `#[serde(untagged)]` enum whose
+/// variants mirror the `oneOf` branches in declaration order.
+///
+/// Why untagged: the wire form of a hand-written `JsonValue` carries no
+/// discriminator, so the serde representation must be untagged too.
+/// Variant *names* never appear on the wire — they're for caller
+/// ergonomics — so we derive them from the variant's type kind
+/// (`String`, `Integer`, `Number`, `Bool`, `Array`, `Object`, `Null`) and
+/// suffix duplicates with a positional index.
+fn render_union(spec: &ir::Ir, name: &Ident, docs: &TokenStream, u: &ir::UnionType) -> TokenStream {
+    if let Some(inner) = types::nullable_inner(spec, u, &models_path_inside()) {
+        return quote! {
+            #docs
+            pub type #name = #inner;
+        };
+    }
+    let names = unique_variant_names(spec, u);
+    let mut variants = TokenStream::new();
+    for (variant_name, v) in names.iter().zip(&u.variants) {
+        let variant_ident = format_ident!("{}", variant_name);
+        if v.r#type == ir::NULL_ID {
+            // Unit variants in untagged enums serialize via
+            // `serialize_unit` (→ JSON `null`) and deserialize from
+            // `null`. No payload needed.
+            variants.extend(quote! { #variant_ident, });
+        } else {
+            let inner = type_ref_to_rust(spec, &v.r#type, &models_path_inside());
+            variants.extend(quote! { #variant_ident(#inner), });
+        }
+    }
+    quote! {
+        #docs
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[serde(untagged)]
+        pub enum #name {
+            #variants
+        }
+    }
+}
+
+/// Pick variant identifiers for a `#[serde(untagged)]` enum. Collisions
+/// (e.g. two object-typed variants) get a `_N` suffix in declaration
+/// order so they remain stable across edits to unrelated variants.
+fn unique_variant_names(spec: &ir::Ir, u: &ir::UnionType) -> Vec<String> {
+    let raw: Vec<String> = u
+        .variants
+        .iter()
+        .map(|v| types::variant_ident_for(spec, &v.r#type))
+        .collect();
+    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for n in &raw {
+        *counts.entry(n.as_str()).or_insert(0) += 1;
+    }
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    raw.iter()
+        .map(|n| {
+            if counts.get(n.as_str()).copied().unwrap_or(0) <= 1 {
+                n.clone()
+            } else {
+                let idx = seen.entry(n.clone()).or_insert(0);
+                *idx += 1;
+                format!("{n}{idx}")
+            }
+        })
+        .collect()
 }
 
 /// Decide whether a `NamedType` earns its keep as a definition in

@@ -25,7 +25,7 @@ use forge_plugin_sdk::generator::forge::plugin::types::{Ir as WitIr, PluginInfo 
 use forge_plugin_sdk::ir;
 
 /// Pure entry point. Operates on the canonical IR.
-pub fn generate(spec: &ir::Ir) -> forge_plugin_sdk::GenerationOutput {
+pub fn generate(spec: &ir::Ir) -> emit::Outcome {
     emit::all(spec)
 }
 
@@ -45,8 +45,13 @@ impl Guest for RustTower {
 
     fn generate(spec: WitIr, _config: String) -> Result<WitGenerationOutput, StageError> {
         let canonical = conv::ir_from_wit(spec);
-        let out = generate(&canonical);
-        Ok(conv::generation_output_to_wit(out))
+        match generate(&canonical) {
+            emit::Outcome::Generated(out) => Ok(conv::generation_output_to_wit(out)),
+            emit::Outcome::Rejected(diagnostics) => Err(conv::rejected(
+                "generator-rust-tower: one or more types are not representable in Rust",
+                diagnostics,
+            )),
+        }
     }
 }
 

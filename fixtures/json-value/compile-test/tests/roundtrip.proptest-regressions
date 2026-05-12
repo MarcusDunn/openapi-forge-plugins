@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3702677f7eff0e641f3f0ca714fa07c48a8fc918ccb55d62c73b6305df9e59ac # shrinks to v = Object {"": Number(-3.4760210466876116e+199)}
+cc fcb9e8e4dab88178ba168f8e2f2ea56673829eab3e505e3f3ff0dd7f1a79ddd0 # shrinks to v = Object {"": Array [Number(-2.748507145887245e+132)]}
+cc aa9aa98bd30ee7dd086a7902294b8d1603be6a65263dd960ae220d8b0d66d67f # shrinks to v = Array [Array [Number(-480599389255.03644)]]
+cc 7dee05fa84418d7d83ad179673c6f77611bb5486b143a0ff9d5b82e2ad1d29a9 # shrinks to v = Object {"": Number(424654121475.65125)}
+cc d2d0fbdd60912e1b1a071be1d8819325488f92bf90e843e71cc3f5051112074a # shrinks to v = Object {"": Object {"": Number(1.824223190286957e-13)}}

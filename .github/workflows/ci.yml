@@ -79,3 +79,13 @@ jobs:
         # arm shadowed by a range arm — both compile fine.
         working-directory: fixtures/petstore/compile-test
         run: cargo test --no-fail-fast
+      - name: Generate json-value client
+        # The json-value fixture mirrors dialai's hand-rolled `JsonValue`
+        # union (recursive `oneOf` of string/number/bool/array/object/
+        # null). Exercises the `#[serde(untagged)]` enum codegen path —
+        # if it regresses to a `serde_json::Value` alias or a hard
+        # error, the assertion in the compile-test catches it.
+        run: forge generate fixtures/json-value
+      - name: Test against json-value client
+        working-directory: fixtures/json-value/compile-test
+        run: cargo test --no-fail-fast

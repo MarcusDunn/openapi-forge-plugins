@@ -1,8 +1,14 @@
 //! IR `TypeRef` / `TypeDef` → Rust type expression as a `TokenStream`.
 //!
-//! Conservative: anything we can't model faithfully falls back to
-//! `serde_json::Value` *and* emits a [`Diagnostic`](forge_plugin_sdk::ir::Diagnostic)
-//! through [`crate::diagnostics`] so the consumer sees what got dropped.
+//! Strict by default: anything we can't model faithfully reports a *fatal*
+//! diagnostic through [`crate::diagnostics::report_fatal`] and the
+//! generator returns a `StageError::Rejected` from `emit::all`.
+//!
+//! Unions in particular: the canonical `T | null` shape lowers to
+//! `Option<T>` inline at the use site; anything else must be a
+//! user-named union, which becomes a `#[serde(untagged)]` enum in
+//! `models.rs` and is referred to by name from use sites. See
+//! [`crate::models::render_union_enum`] for the alias/enum split.
 
 use forge_plugin_sdk::diag;
 use forge_plugin_sdk::ir;
@@ -21,16 +27,16 @@ pub type ModelsPath = TokenStream;
 /// expression. Looks up the named type and consults its `TypeDef`.
 pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath) -> TokenStream {
     if type_ref == ir::NULL_ID {
-        diagnostics::report(diag::warning(
+        diagnostics::report_fatal(diag::error(
             "rust-tower/type-fallback-null",
-            "bare `null`-typed reference at use site; emitting `serde_json::Value`",
+            "bare `null`-typed reference at use site has no Rust representation",
         ));
         return quote! { serde_json::Value };
     }
     let Some(named) = spec.types.iter().find(|t| t.id == type_ref) else {
-        diagnostics::report(diag::warning(
+        diagnostics::report_fatal(diag::error(
             "rust-tower/type-fallback-unresolved",
-            format!("unresolved type reference `{type_ref}`; emitting `serde_json::Value`"),
+            format!("unresolved type reference `{type_ref}`"),
         ));
         return quote! { serde_json::Value };
     };
@@ -54,14 +60,38 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             let inner = type_ref_to_rust(spec, &a.items, models_path);
             quote! { Vec<#inner> }
         }
-        ir::TypeDef::Union(u) => union_to_rust(spec, u, models_path),
+        ir::TypeDef::Union(u) => {
+            // `T | null` collapses to `Option<T>` and can be inlined at any
+            // use site (or used as the RHS of a `pub type` alias).
+            if let Some(inner) = nullable_inner(spec, u, models_path) {
+                return inner;
+            }
+            // Anything else must be a user-named union — the def site
+            // emits a `#[serde(untagged)]` enum in `models.rs` and we
+            // refer to it by name here. Synthesized inline multi-variant
+            // unions have no name to reference, so they're a fatal error.
+            if named.original_name.is_some() {
+                named_type_path(models_path, &naming::rust_type_name(named))
+            } else {
+                let variants: Vec<&str> = u.variants.iter().map(|v| v.r#type.as_str()).collect();
+                diagnostics::report_fatal(diag::error(
+                    "rust-tower/inline-union-unnamed",
+                    format!(
+                        "inline multi-variant union of {} variants {:?} has no schema name to \
+                         hoist to a Rust enum. Promote this `oneOf` to a named schema in \
+                         `components/schemas` so the generator can emit \
+                         `#[derive(Serialize, Deserialize)] #[serde(untagged)] pub enum ...`.",
+                        u.variants.len(),
+                        variants
+                    ),
+                ));
+                quote! { serde_json::Value }
+            }
+        }
         ir::TypeDef::Null => {
-            diagnostics::report(diag::warning(
+            diagnostics::report_fatal(diag::error(
                 "rust-tower/type-fallback-null-def",
-                format!(
-                    "named type `{}` resolves to `null`; emitting `serde_json::Value`",
-                    named.id
-                ),
+                format!("named type `{}` resolves to `null`", named.id),
             ));
             quote! { serde_json::Value }
         }
@@ -109,32 +139,64 @@ fn primitive_to_rust(p: &ir::PrimitiveType) -> TokenStream {
     }
 }
 
-/// `T | null` (the only union shape this generator models faithfully)
-/// becomes `Option<T>`. Everything else is `serde_json::Value`.
-fn union_to_rust(spec: &ir::Ir, u: &ir::UnionType, models_path: &ModelsPath) -> TokenStream {
-    if u.variants.len() == 2 {
-        let null_pos = u.variants.iter().position(|v| v.r#type == ir::NULL_ID);
-        if let Some(idx) = null_pos {
-            let other = &u.variants[1 - idx];
-            let inner = type_ref_to_rust(spec, &other.r#type, models_path);
-            // Avoid `Option<Option<...>>` if the inner already nests.
-            return if is_option(&inner) {
-                inner
-            } else {
-                quote! { Option<#inner> }
-            };
-        }
+/// If `u` is the two-variant `T | null` shape, return the Rust
+/// `Option<T>` (or `T` if `T` is already an `Option`). Otherwise `None`.
+pub fn nullable_inner(
+    spec: &ir::Ir,
+    u: &ir::UnionType,
+    models_path: &ModelsPath,
+) -> Option<TokenStream> {
+    if u.variants.len() != 2 {
+        return None;
     }
-    let variants: Vec<&str> = u.variants.iter().map(|v| v.r#type.as_str()).collect();
-    diagnostics::report(diag::warning(
-        "rust-tower/type-fallback-union",
-        format!(
-            "union of {} variants {:?} not modeled (only `T | null` is); emitting `serde_json::Value`",
-            u.variants.len(),
-            variants
-        ),
-    ));
-    quote! { serde_json::Value }
+    let null_pos = u.variants.iter().position(|v| v.r#type == ir::NULL_ID)?;
+    let other = &u.variants[1 - null_pos];
+    let inner = type_ref_to_rust(spec, &other.r#type, models_path);
+    Some(if is_option(&inner) {
+        inner
+    } else {
+        quote! { Option<#inner> }
+    })
+}
+
+/// Variant identifier for a member of a `#[serde(untagged)]` enum.
+///
+/// Untagged means the wire never sees these names — they're an
+/// ergonomics choice. Strategy:
+///  - if the variant's named type has an `original_name`, Pascal-case it;
+///  - else derive from the kind (`String`, `Integer`, `Number`, `Bool`,
+///    `Array`, `Object`, `Null`, `Enum`);
+///  - the caller is responsible for de-duplication.
+pub fn variant_ident_for(spec: &ir::Ir, type_ref: &str) -> String {
+    if type_ref == ir::NULL_ID {
+        return "Null".into();
+    }
+    let Some(named) = spec.types.iter().find(|t| t.id == type_ref) else {
+        return "Variant".into();
+    };
+    if let Some(orig) = &named.original_name {
+        return naming::pascal_case(orig);
+    }
+    match &named.definition {
+        ir::TypeDef::Primitive(p) => match p.kind {
+            ir::PrimitiveKind::String => "String".into(),
+            ir::PrimitiveKind::Integer => "Integer".into(),
+            ir::PrimitiveKind::Number => "Number".into(),
+            ir::PrimitiveKind::Bool => "Bool".into(),
+        },
+        ir::TypeDef::Array(_) => "Array".into(),
+        ir::TypeDef::Object(o) => {
+            if additional_properties_only(o).is_some() {
+                "Object".into()
+            } else {
+                naming::pascal_case(&named.id)
+            }
+        }
+        ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) | ir::TypeDef::Union(_) => {
+            naming::pascal_case(&named.id)
+        }
+        ir::TypeDef::Null => "Null".into(),
+    }
 }
 
 /// Cheap check: is the first token of `ts` the identifier `Option`?
