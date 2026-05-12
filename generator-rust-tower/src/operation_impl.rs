@@ -130,7 +130,7 @@ fn render_error_enum(out: &mut String, name: &str) {
     out.push_str("    #[error(\"json decode error: {0}\")]\n");
     out.push_str("    Decode(#[from] serde_json::Error),\n");
     out.push_str("    #[error(\"response body collection failed: {0}\")]\n");
-    out.push_str("    Body(Box<dyn std::error::Error + Send + Sync>),\n");
+    out.push_str("    Body(Box<dyn std::error::Error + Send + Sync + 'static>),\n");
     out.push_str("    #[error(\"http builder error: {0}\")]\n");
     out.push_str("    HttpBuild(#[from] http::Error),\n");
     out.push_str("}\n\n");
