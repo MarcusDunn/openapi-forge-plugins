@@ -80,11 +80,11 @@ fn render_request_struct(spec: &ir::Ir, op: &ir::Operation, name: &Ident) -> Tok
         } else {
             let media_types: Vec<&str> =
                 body.content.iter().map(|c| c.media_type.as_str()).collect();
-            diagnostics::report(diag::warning(
+            diagnostics::report_fatal(diag::error(
                 "rust-tower/request-body-non-json",
                 format!(
-                    "operation `{}` has request body content types {:?} but no JSON; \
-                     emitting `serde_json::Value` placeholder",
+                    "operation `{}` has request body content types {:?} but no JSON family \
+                     match; this generator only models JSON bodies",
                     op.id, media_types
                 ),
             ));

@@ -1,0 +1,86 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "JsonValue",
+    "version": "1.0.0",
+    "description": "Fixture for the hand-written 'any JSON' union pattern (mirrors dialai backend's JsonValue schema). Exercises the recursive-union code path in the rust-tower generator."
+  },
+  "servers": [
+    { "url": "https://example.com" }
+  ],
+  "paths": {
+    "/value": {
+      "get": {
+        "operationId": "getValue",
+        "summary": "Return any JSON value.",
+        "responses": {
+          "200": {
+            "description": "Arbitrary JSON.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/JsonValue" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/envelope": {
+      "post": {
+        "operationId": "postEnvelope",
+        "summary": "Echo an envelope carrying a JsonValue-typed map.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Envelope" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Echo of the envelope.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Envelope" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "JsonValue": {
+        "description": "Any JSON value. Equivalent to Kotlin's kotlinx.serialization.json.JsonElement; mirrors dialai backend's schema verbatim.",
+        "oneOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/JsonValue" }
+          },
+          {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          },
+          { "type": "null" }
+        ]
+      },
+      "Envelope": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "extras": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/JsonValue" }
+          }
+        },
+        "required": ["name", "extras"],
+        "additionalProperties": false
+      }
+    }
+  }
+}
