@@ -10,6 +10,10 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Cheap lints. Run first so a bad rustfmt fails the PR in seconds rather
+  # than waiting for the wasm build to finish.
+  # ---------------------------------------------------------------------------
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -18,9 +22,14 @@ jobs:
         with:
           toolchain: "1.87.0"
           components: rustfmt
-      - name: cargo fmt (workspace root)
+      - name: cargo fmt
         run: cargo fmt --all -- --check
 
+  # ---------------------------------------------------------------------------
+  # Build every plugin in the workspace (debug + release, wasm32-wasip2) and
+  # run clippy across the whole tree. Uploads the release `.wasm` artifacts
+  # so the downstream test jobs can consume them without rebuilding.
+  # ---------------------------------------------------------------------------
   build-plugins:
     runs-on: ubuntu-latest
     steps:
@@ -33,30 +42,57 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-      - name: Build plugins (debug, wasm32-wasip2)
+      - name: cargo build (debug)
         run: cargo build --target wasm32-wasip2
-      - name: Build plugins (release, wasm32-wasip2)
+      - name: cargo build (release)
         run: cargo build --release --target wasm32-wasip2
-      - name: Clippy on plugins
+      - name: cargo clippy
         run: cargo clippy --target wasm32-wasip2 --all-targets -- -D warnings
-      - name: Upload WASM artifacts
+      - name: Upload wasm artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/*.wasm
           retention-days: 7
 
-  smoke-test-petstore:
+  # ---------------------------------------------------------------------------
+  # Per-fixture integration tests. Each fixture under `fixtures/` is a real
+  # OpenAPI spec + a `compile-test` crate that drives the *generated* code
+  # through `tower::service_fn` fakes — so this catches runtime regressions
+  # (wrong serde rename, shadowed status arm, untagged enum that doesn't
+  # round-trip), not just "did it compile".
+  #
+  # Matrix design:
+  #  - One job per fixture, run in parallel. New fixture? Add its directory
+  #    name to the matrix list below; the steps are uniform.
+  #  - `fail-fast: false` so a regression in one fixture doesn't mask the
+  #    status of others.
+  #  - `Plugin under test` annotates which plugins each fixture exercises —
+  #    only metadata, used in the job display name. The actual coupling is
+  #    declared in the fixture's `forge.toml`.
+  # ---------------------------------------------------------------------------
+  test-fixture:
     runs-on: ubuntu-latest
     needs: build-plugins
+    name: "test ${{ matrix.fixture }} (${{ matrix.plugins }})"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - fixture: petstore
+            plugins: "generator-rust-tower + transformer-filter-operations"
+          - fixture: json-value
+            plugins: "generator-rust-tower"
     steps:
       - uses: actions/checkout@v4
-      # Latest stable — the forge CLI's transitive `wasmtime` pulls in
-      # crates that need rustc ≥ 1.92. Plugin builds stay pinned to 1.87
-      # in the build-plugins job above.
+      # Latest stable for the forge CLI install — its transitive `wasmtime`
+      # needs rustc ≥ 1.92. The plugin builds in `build-plugins` stay pinned
+      # to 1.87.
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Download WASM artifacts
+        with:
+          workspaces: "fixtures/${{ matrix.fixture }}/compile-test -> target"
+      - name: Download wasm artifacts
         uses: actions/download-artifact@v4
         with:
           name: wasm-plugins
@@ -64,28 +100,11 @@ jobs:
       - name: Install forge CLI
         # The crate is `openapi-forge-cli` (the bare `forge-cli` name was
         # already taken on crates.io); the installed binary is still `forge`.
-        # Override the repo's `rust-toolchain.toml` (1.87) for this step —
-        # forge-cli's transitive `wasmtime` pulls in crates that need 1.92.
         env:
           RUSTUP_TOOLCHAIN: stable
         run: cargo install openapi-forge-cli --version "^0.1.9" --locked
-      - name: Generate petstore client
-        run: forge generate fixtures/petstore
-      - name: Test against generated client
-        # `cargo test` runs the suite in `compile-test/tests/`, which
-        # exercises the generated code through `tower::service_fn` fakes
-        # (every codegen fix has a runtime regression test). `cargo build`
-        # alone wouldn't catch e.g. an inverted serde-rename or a status
-        # arm shadowed by a range arm — both compile fine.
-        working-directory: fixtures/petstore/compile-test
-        run: cargo test --no-fail-fast
-      - name: Generate json-value client
-        # The json-value fixture mirrors dialai's hand-rolled `JsonValue`
-        # union (recursive `oneOf` of string/number/bool/array/object/
-        # null). Exercises the `#[serde(untagged)]` enum codegen path —
-        # if it regresses to a `serde_json::Value` alias or a hard
-        # error, the assertion in the compile-test catches it.
-        run: forge generate fixtures/json-value
-      - name: Test against json-value client
-        working-directory: fixtures/json-value/compile-test
+      - name: forge generate fixtures/${{ matrix.fixture }}
+        run: forge generate fixtures/${{ matrix.fixture }}
+      - name: cargo test
+        working-directory: fixtures/${{ matrix.fixture }}/compile-test
         run: cargo test --no-fail-fast
