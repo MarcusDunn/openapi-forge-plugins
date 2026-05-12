@@ -6,17 +6,27 @@
 //! worlds — code compiles, "looks fine," silently lossy. Use diagnostics or
 //! refuse to emit instead.
 
+use forge_plugin_sdk::diag;
 use forge_plugin_sdk::ir;
 
+use crate::diagnostics;
 use crate::naming;
 
 /// Resolve a `TypeRef` (string id into `Ir::types`) to a Rust type
 /// expression. Looks up the named type and consults its `TypeDef`.
 pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &str) -> String {
     if type_ref == ir::NULL_ID {
+        diagnostics::report(diag::warning(
+            "rust-tower/type-fallback-null",
+            "bare `null`-typed reference at use site; emitting `serde_json::Value`",
+        ));
         return "serde_json::Value".to_string();
     }
     let Some(named) = spec.types.iter().find(|t| t.id == type_ref) else {
+        diagnostics::report(diag::warning(
+            "rust-tower/type-fallback-unresolved",
+            format!("unresolved type reference `{type_ref}`; emitting `serde_json::Value`"),
+        ));
         return "serde_json::Value".to_string();
     };
     match &named.definition {
@@ -39,7 +49,16 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &str) -> Str
             format!("Vec<{}>", type_ref_to_rust(spec, &a.items, models_path))
         }
         ir::TypeDef::Union(u) => union_to_rust(spec, u, models_path),
-        ir::TypeDef::Null => "serde_json::Value".to_string(),
+        ir::TypeDef::Null => {
+            diagnostics::report(diag::warning(
+                "rust-tower/type-fallback-null-def",
+                format!(
+                    "named type `{}` resolves to `null`; emitting `serde_json::Value`",
+                    named.id
+                ),
+            ));
+            "serde_json::Value".to_string()
+        }
     }
 }
 
@@ -104,5 +123,14 @@ fn union_to_rust(spec: &ir::Ir, u: &ir::UnionType, models_path: &str) -> String 
             };
         }
     }
+    let variants: Vec<&str> = u.variants.iter().map(|v| v.r#type.as_str()).collect();
+    diagnostics::report(diag::warning(
+        "rust-tower/type-fallback-union",
+        format!(
+            "union of {} variants {:?} not modeled (only `T | null` is); emitting `serde_json::Value`",
+            u.variants.len(),
+            variants
+        ),
+    ));
     "serde_json::Value".to_string()
 }

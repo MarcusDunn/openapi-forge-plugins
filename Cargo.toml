@@ -5,14 +5,15 @@ members = [
     "generator-rust-tower",
 ]
 
-# Plugins target `wasm32-wasip2` only. No host-side crates here — the
-# tower runtime trait is emitted inline in each generated client (see
-# `generator-rust-tower/templates/runtime.rs.in`), so callers don't have
-# to pull a separate crate from crates.io. Plugins ship as public OCI
-# WASM components at `ghcr.io/marcusdunn/<plugin>:<tag>`.
+# Plugin crates ship as public OCI WASM components at
+# `ghcr.io/marcusdunn/<plugin>:<tag>`. They build only as `cdylib` for
+# `wasm32-wasip2`; tests run against the *generated* client (see the
+# petstore smoke job), not against the generator's pure functions on the
+# host. That keeps the bug surface aligned with what consumers actually
+# see, at the cost of slower test iteration.
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 rust-version = "1.87"
 license = "Apache-2.0 OR MIT"
@@ -20,7 +21,6 @@ repository = "https://github.com/MarcusDunn/openapi-forge-plugins"
 
 [workspace.dependencies]
 forge-plugin-sdk = "0.1.9"
-forge-ir = "0.1.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

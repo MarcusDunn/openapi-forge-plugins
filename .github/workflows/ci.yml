@@ -71,6 +71,11 @@ jobs:
         run: cargo install openapi-forge-cli --version "^0.1.9" --locked
       - name: Generate petstore client
         run: forge generate fixtures/petstore
-      - name: Compile generated client
+      - name: Test against generated client
+        # `cargo test` runs the suite in `compile-test/tests/`, which
+        # exercises the generated code through `tower::service_fn` fakes
+        # (every codegen fix has a runtime regression test). `cargo build`
+        # alone wouldn't catch e.g. an inverted serde-rename or a status
+        # arm shadowed by a range arm — both compile fine.
         working-directory: fixtures/petstore/compile-test
-        run: cargo build
+        run: cargo test --no-fail-fast

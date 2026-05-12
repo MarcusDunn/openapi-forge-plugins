@@ -9,8 +9,10 @@
 //! The trait's `parse_response` is the only thing with hairy bounds; the
 //! actual `match status { … }` inside is mechanical.
 
+use forge_plugin_sdk::diag;
 use forge_plugin_sdk::ir;
 
+use crate::diagnostics;
 use crate::naming;
 use crate::types::type_ref_to_rust;
 
@@ -76,14 +78,14 @@ fn render_request_struct(out: &mut String, spec: &ir::Ir, op: &ir::Operation, na
         out.push_str(&format!("    pub {field}: {final_ty},\n"));
     }
     if let Some(body) = &op.request_body {
-        // We pick the first `application/json` body; multipart / form-data /
-        // binary fall back to `serde_json::Value` with a TODO note. The
-        // dialai use case only hits JSON, so anything else just doesn't
-        // exercise this path.
+        // We pick the first JSON-shaped body; multipart / form-data / binary
+        // fall back to `serde_json::Value` with a TODO note. The dialai use
+        // case only hits JSON, so anything else just doesn't exercise this
+        // path.
         if let Some(json) = body
             .content
             .iter()
-            .find(|c| c.media_type == "application/json")
+            .find(|c| is_json_media_type(&c.media_type))
         {
             let ty = type_ref_to_rust(spec, &json.r#type, MODELS_PATH);
             let final_ty = if body.required {
@@ -93,6 +95,16 @@ fn render_request_struct(out: &mut String, spec: &ir::Ir, op: &ir::Operation, na
             };
             out.push_str(&format!("    pub body: {final_ty},\n"));
         } else {
+            let media_types: Vec<&str> =
+                body.content.iter().map(|c| c.media_type.as_str()).collect();
+            diagnostics::report(diag::warning(
+                "rust-tower/request-body-non-json",
+                format!(
+                    "operation `{}` has request body content types {:?} but no JSON; \
+                     emitting `serde_json::Value` placeholder",
+                    op.id, media_types
+                ),
+            ));
             out.push_str("    // TODO non-JSON request body — falling back to serde_json::Value\n");
             out.push_str("    pub body: serde_json::Value,\n");
         }
@@ -158,17 +170,22 @@ fn render_operation_impl(
     ));
     let op_id = op.original_id.as_deref().unwrap_or(&op.id);
     out.push_str(&format!(
-        "    const OPERATION_ID: &'static str = \"{}\";\n\n",
+        "    const OPERATION_ID: &'static str = \"{}\";\n",
         naming::escape_str(op_id)
     ));
+    let (is_safe, is_idempotent) = method_semantics(op.method.as_str());
+    out.push_str(&format!("    const IS_SAFE: bool = {is_safe};\n"));
+    out.push_str(&format!(
+        "    const IS_IDEMPOTENT: bool = {is_idempotent};\n\n"
+    ));
 
-    render_into_http_request(out, op);
+    render_into_http_request(out, spec, op);
     out.push('\n');
     render_parse_response(out, spec, op, output_name, error_name);
     out.push_str("}\n");
 }
 
-fn render_into_http_request(out: &mut String, op: &ir::Operation) {
+fn render_into_http_request(out: &mut String, spec: &ir::Ir, op: &ir::Operation) {
     out.push_str("    fn into_http_request(self) -> Result<http::Request<Self::RequestBody>, Self::Error> {\n");
     out.push_str("        let Self {\n");
     let mut field_names = Vec::new();
@@ -216,20 +233,35 @@ fn render_into_http_request(out: &mut String, op: &ir::Operation) {
     out.push_str("            .method(Self::METHOD)\n");
     out.push_str("            .uri(path.as_str());\n");
 
-    // Query string.
+    // Query string. OpenAPI 3 defaults `style=form, explode=true` for query
+    // params, which means arrays serialize as repeated `key=value` pairs.
     if !op.query_params.is_empty() {
         out.push_str("        let mut query = String::new();\n");
         for p in &op.query_params {
             let snake = naming::snake_case(&p.name);
             let key = naming::escape_str(&p.name);
-            if p.required {
-                out.push_str(&format!(
-                    "        runtime::push_query(&mut query, \"{key}\", &{snake}.to_string());\n"
-                ));
-            } else {
-                out.push_str(&format!(
-                    "        if let Some(v) = &{snake} {{ runtime::push_query(&mut query, \"{key}\", &v.to_string()); }}\n"
-                ));
+            let is_array = is_array_type(spec, &p.r#type);
+            match (p.required, is_array) {
+                (true, true) => {
+                    out.push_str(&format!(
+                        "        for item in &{snake} {{ runtime::push_query(&mut query, \"{key}\", &item.to_string()); }}\n"
+                    ));
+                }
+                (false, true) => {
+                    out.push_str(&format!(
+                        "        if let Some(items) = &{snake} {{ for item in items {{ runtime::push_query(&mut query, \"{key}\", &item.to_string()); }} }}\n"
+                    ));
+                }
+                (true, false) => {
+                    out.push_str(&format!(
+                        "        runtime::push_query(&mut query, \"{key}\", &{snake}.to_string());\n"
+                    ));
+                }
+                (false, false) => {
+                    out.push_str(&format!(
+                        "        if let Some(v) = &{snake} {{ runtime::push_query(&mut query, \"{key}\", &v.to_string()); }}\n"
+                    ));
+                }
             }
         }
         out.push_str("        let final_uri = if query.is_empty() { path } else { format!(\"{path}?{query}\") };\n");
@@ -257,7 +289,7 @@ fn render_into_http_request(out: &mut String, op: &ir::Operation) {
             if body
                 .content
                 .iter()
-                .any(|c| c.media_type == "application/json")
+                .any(|c| is_json_media_type(&c.media_type))
             {
                 out.push_str(
                     "        builder = builder.header(http::header::CONTENT_TYPE, \"application/json\");\n",
@@ -291,15 +323,6 @@ fn render_into_http_request(out: &mut String, op: &ir::Operation) {
 
     out.push_str("        Ok(builder.body(request_body)?)\n");
     out.push_str("    }\n");
-
-    // Inline helper at the impl body's top — emitted once per impl, fine.
-    if !op.query_params.is_empty() {
-        // We need a free function in scope for `push_query`. Re-emit it as
-        // a closure-free fn at module scope by appending it after the impl.
-        // (Actually emit it as a local fn inside `into_http_request` so it
-        // doesn't pollute the module.) — adjust: easiest is a free fn at
-        // module scope. We add it after the operation_impl block ends.
-    }
 }
 
 /// Rewrite `/foo/{rawName}/bar` to `/foo/{rust_name}/bar` so it composes
@@ -357,23 +380,31 @@ fn render_parse_response(
     out.push_str("    where\n");
     out.push_str("        B: http_body::Body + Send + 'static,\n");
     out.push_str("        B::Data: Send,\n");
-    out.push_str(
-        "        B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,\n",
-    );
+    out.push_str("        B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,\n");
     out.push_str("    {\n");
     out.push_str("        let (parts, body) = resp.into_parts();\n");
     out.push_str(
         "        let bytes = runtime::collect_bytes(body).await.map_err(|e| Self::Error::Body(e.into()))?;\n",
     );
     out.push_str("        match parts.status.as_u16() {\n");
+    // Rust matches arms top-to-bottom and `400..=499` shadows a later `400 =>`.
+    // Partition so explicit codes come first, then range arms (`4XX`-style),
+    // then `default` falls into the catch-all arm.
+    let explicit: Vec<&ir::Response> = op
+        .responses
+        .iter()
+        .filter(|r| matches!(r.status, ir::ResponseStatus::Explicit { .. }))
+        .collect();
+    let ranges: Vec<&ir::Response> = op
+        .responses
+        .iter()
+        .filter(|r| matches!(r.status, ir::ResponseStatus::Range { .. }))
+        .collect();
     let default_resp = op
         .responses
         .iter()
         .find(|r| matches!(r.status, ir::ResponseStatus::Default));
-    for resp in &op.responses {
-        if matches!(resp.status, ir::ResponseStatus::Default) {
-            continue; // handled as the catch-all arm below
-        }
+    for resp in explicit.iter().chain(ranges.iter()) {
         let status_codes = numeric_status_codes(&resp.status);
         let variant = status_variant(&resp.status);
         let body = pick_json_response_body(resp);
@@ -423,11 +454,51 @@ fn render_parse_response(
     let _ = spec;
 }
 
+/// Per RFC 9110: GET/HEAD/OPTIONS/TRACE are safe; safe methods plus
+/// PUT/DELETE are idempotent. Anything else (POST, PATCH, CONNECT, or an
+/// extension method) defaults to "neither" — generated code is for
+/// well-known methods only and the conservative default lets retry/cache
+/// middleware do the right thing when unsure.
+fn method_semantics(method: &str) -> (bool, bool) {
+    match method {
+        "GET" | "HEAD" | "OPTIONS" | "TRACE" => (true, true),
+        "PUT" | "DELETE" => (false, true),
+        _ => (false, false),
+    }
+}
+
+/// Whether a parameter's type ref resolves to a `TypeDef::Array`. Drives
+/// query-string codegen: arrays serialize as repeated `key=value` pairs
+/// (`style=form, explode=true`, the OpenAPI 3 default).
+fn is_array_type(spec: &ir::Ir, type_ref: &str) -> bool {
+    spec.types
+        .iter()
+        .find(|t| t.id == type_ref)
+        .is_some_and(|t| matches!(t.definition, ir::TypeDef::Array(_)))
+}
+
 fn pick_json_response_body(resp: &ir::Response) -> Option<&str> {
     resp.content
         .iter()
-        .find(|c| c.media_type == "application/json")
+        .find(|c| is_json_media_type(&c.media_type))
         .map(|c| c.r#type.as_str())
+}
+
+/// Recognize JSON-shaped content types: `application/json`, the `+json`
+/// structured-syntax suffix (`application/problem+json`, `application/vnd.api+json`),
+/// and either with trailing media-type parameters (`; charset=utf-8`).
+/// Match is case-insensitive on the type/subtype per RFC 9110.
+fn is_json_media_type(media_type: &str) -> bool {
+    let essence = media_type
+        .split(';')
+        .next()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    essence == "application/json"
+        || essence
+            .strip_prefix("application/")
+            .is_some_and(|rest| rest.ends_with("+json"))
 }
 
 /// Variant name on the per-op response enum for a given status. We name

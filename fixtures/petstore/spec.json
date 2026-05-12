@@ -3,7 +3,7 @@
   "info": {
     "title": "Petstore",
     "version": "1.0.0",
-    "description": "A minimal Petstore for Stage 3 conformance."
+    "description": "Petstore fixture exercising the rust-tower generator's codegen across enum styles, array query params, mixed response shapes, and content-type families."
   },
   "servers": [
     { "url": "https://petstore.example.com/v1" }
@@ -68,6 +68,34 @@
         }
       }
     },
+    "/pets/findByTag": {
+      "get": {
+        "operationId": "findPetsByTag",
+        "summary": "Filter pets by one or more tag values (array query param: bug #5).",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "tag",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching pets",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pets" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/{petId}": {
       "get": {
         "operationId": "showPetById",
@@ -99,6 +127,86 @@
             }
           }
         }
+      },
+      "put": {
+        "operationId": "replacePet",
+        "summary": "Idempotent replace; both `400` and `4XX` declared (bug #3).",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Pet" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated pet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pet" }
+              }
+            }
+          },
+          "400": {
+            "description": "Specific 400 (must match before 4XX)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Other client errors",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "default": {
+            "description": "Anything else",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/{petId}/problem": {
+      "get": {
+        "operationId": "getPetProblem",
+        "summary": "Endpoint that responds with `application/problem+json` (bug #13).",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Problem response",
+            "content": {
+              "application/problem+json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -110,12 +218,24 @@
         "properties": {
           "id": { "type": "integer", "format": "int64" },
           "name": { "type": "string" },
-          "tag": { "type": "string" }
+          "tag": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/PetStatus" },
+          "mood": { "$ref": "#/components/schemas/PetMood" }
         }
       },
       "Pets": {
         "type": "array",
         "items": { "$ref": "#/components/schemas/Pet" }
+      },
+      "PetStatus": {
+        "type": "string",
+        "description": "Mixed-case enum values (bug #1).",
+        "enum": ["available", "inProgress", "sold"]
+      },
+      "PetMood": {
+        "type": "integer",
+        "description": "Integer enum with a negative discriminant (bug #2).",
+        "enum": [-1, 0, 1]
       },
       "Error": {
         "type": "object",

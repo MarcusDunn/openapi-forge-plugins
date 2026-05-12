@@ -16,6 +16,7 @@
 use forge_plugin_sdk::ir;
 use forge_plugin_sdk::{FileMode, GenerationOutput, OutputFile};
 
+use crate::diagnostics;
 use crate::models;
 use crate::naming;
 use crate::operation_impl;
@@ -49,6 +50,20 @@ pub fn all(spec: &ir::Ir) -> GenerationOutput {
         let snake = naming::snake_case(&op.id);
         operations_mod.push_str(&format!("pub mod {snake};\n"));
     }
+    // Re-export each operation's public surface (request struct + Output +
+    // Error) at the operations root so callers can write
+    // `gen::operations::UpdatePet` instead of
+    // `gen::operations::update_pet::{UpdatePet, UpdatePetOutput, UpdatePetError}`.
+    if !spec.operations.is_empty() {
+        operations_mod.push('\n');
+        for op in &spec.operations {
+            let snake = naming::snake_case(&op.id);
+            let struct_name = naming::pascal_case(&op.id);
+            operations_mod.push_str(&format!(
+                "pub use self::{snake}::{{{struct_name}, {struct_name}Output, {struct_name}Error}};\n"
+            ));
+        }
+    }
 
     files.push(OutputFile {
         path: "operations/mod.rs".into(),
@@ -65,8 +80,12 @@ pub fn all(spec: &ir::Ir) -> GenerationOutput {
         });
     }
 
+    // `types::type_ref_to_rust` and `operation_impl::render_request_struct`
+    // push into a thread-local sink whenever they emit a `serde_json::Value`
+    // fallback. Drain at the end so the result rides along in the
+    // generator's `GenerationOutput`.
     GenerationOutput {
         files,
-        diagnostics: Vec::new(),
+        diagnostics: diagnostics::drain(),
     }
 }

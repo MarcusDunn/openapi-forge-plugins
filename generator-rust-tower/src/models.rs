@@ -140,6 +140,11 @@ fn render_struct(out: &mut String, spec: &ir::Ir, name: &str, o: &ir::ObjectType
 }
 
 fn render_string_enum(out: &mut String, name: &str, e: &ir::EnumStringType) {
+    // We always emit `#[serde(rename = "...")]` per variant. Trying to
+    // detect "the Pascal-cased variant matches the wire value already" is
+    // both clever and easy to get wrong (mixed-case wire values like
+    // `inProgress` round-trip through `pascal_case` to `InProgress`, which
+    // would *not* match `inProgress` by default). Cheaper to be explicit.
     out.push_str("#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]\n");
     out.push_str(&format!("pub enum {name} {{\n"));
     for value in &e.values {
@@ -151,17 +156,10 @@ fn render_string_enum(out: &mut String, name: &str, e: &ir::EnumStringType) {
                 out.push('\n');
             }
         }
-        if strip_raw(&naming::snake_case(&variant)) != value.value
-            || !value
-                .value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
-            out.push_str(&format!(
-                "    #[serde(rename = \"{}\")]\n",
-                naming::escape_str(&value.value)
-            ));
-        }
+        out.push_str(&format!(
+            "    #[serde(rename = \"{}\")]\n",
+            naming::escape_str(&value.value)
+        ));
         out.push_str(&format!("    {variant},\n"));
     }
     out.push_str("}\n");
@@ -182,7 +180,7 @@ fn render_int_enum(out: &mut String, name: &str, e: &ir::EnumIntType) {
                 out.push('\n');
             }
         }
-        out.push_str(&format!("    V{},\n", value.value.abs()));
+        out.push_str(&format!("    {},\n", int_variant_name(value.value)));
     }
     out.push_str("}\n\n");
     out.push_str(&format!("impl From<{name}> for i64 {{\n"));
@@ -190,8 +188,8 @@ fn render_int_enum(out: &mut String, name: &str, e: &ir::EnumIntType) {
     out.push_str("        match v {\n");
     for value in &e.values {
         out.push_str(&format!(
-            "            {name}::V{} => {},\n",
-            value.value.abs(),
+            "            {name}::{} => {},\n",
+            int_variant_name(value.value),
             value.value
         ));
     }
@@ -202,15 +200,27 @@ fn render_int_enum(out: &mut String, name: &str, e: &ir::EnumIntType) {
     out.push_str("        match v {\n");
     for value in &e.values {
         out.push_str(&format!(
-            "            {} => Ok({name}::V{}),\n",
+            "            {} => Ok({name}::{}),\n",
             value.value,
-            value.value.abs()
+            int_variant_name(value.value)
         ));
     }
     out.push_str(&format!(
         "            other => Err(format!(\"unknown {name} discriminant: {{}}\", other)),\n"
     ));
     out.push_str("        }\n    }\n}\n");
+}
+
+/// Rust variant name for an integer enum value. Sign-aware so that
+/// `1` and `-1` don't both collapse to `V1`. `0` is `V0`.
+fn int_variant_name(value: i64) -> String {
+    if value < 0 {
+        // i64::MIN's absolute value doesn't fit in i64; format the literal
+        // directly to avoid the overflow.
+        format!("VNeg{}", value.unsigned_abs())
+    } else {
+        format!("V{value}")
+    }
 }
 
 fn strip_raw(s: &str) -> &str {

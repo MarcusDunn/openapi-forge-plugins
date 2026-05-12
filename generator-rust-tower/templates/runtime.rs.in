@@ -17,6 +17,12 @@ pub trait Operation: Sized {
     const METHOD: http::Method;
     const PATH_TEMPLATE: &'static str;
     const OPERATION_ID: &'static str;
+    /// Per RFC 9110 §9.2.1: GET/HEAD/OPTIONS/TRACE produce no observable
+    /// side effects. Middleware (cache, automatic retries) keys off this.
+    const IS_SAFE: bool;
+    /// Per RFC 9110 §9.2.2: safe methods are idempotent, plus PUT and
+    /// DELETE. Retry layers should refuse to retry non-idempotent ops.
+    const IS_IDEMPOTENT: bool;
 
     /// Build the outbound `http::Request` from this operation's inputs.
     ///

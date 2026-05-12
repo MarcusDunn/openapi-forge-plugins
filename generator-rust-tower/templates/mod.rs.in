@@ -19,4 +19,4 @@ pub mod runtime;
 pub mod models;
 pub mod operations;
 
-pub use runtime::{collect_bytes, execute, ExecuteError, Operation};
+pub use runtime::{execute, ExecuteError, Operation};

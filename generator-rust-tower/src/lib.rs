@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod diagnostics;
 mod emit;
 mod models;
 mod naming;
