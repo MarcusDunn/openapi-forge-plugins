@@ -170,13 +170,8 @@ fn render_operation_impl(
     ));
     let op_id = op.original_id.as_deref().unwrap_or(&op.id);
     out.push_str(&format!(
-        "    const OPERATION_ID: &'static str = \"{}\";\n",
+        "    const OPERATION_ID: &'static str = \"{}\";\n\n",
         naming::escape_str(op_id)
-    ));
-    let (is_safe, is_idempotent) = method_semantics(op.method.as_str());
-    out.push_str(&format!("    const IS_SAFE: bool = {is_safe};\n"));
-    out.push_str(&format!(
-        "    const IS_IDEMPOTENT: bool = {is_idempotent};\n\n"
     ));
 
     render_into_http_request(out, spec, op);
@@ -452,19 +447,6 @@ fn render_parse_response(
     out.push_str("        }\n");
     out.push_str("    }\n");
     let _ = spec;
-}
-
-/// Per RFC 9110: GET/HEAD/OPTIONS/TRACE are safe; safe methods plus
-/// PUT/DELETE are idempotent. Anything else (POST, PATCH, CONNECT, or an
-/// extension method) defaults to "neither" — generated code is for
-/// well-known methods only and the conservative default lets retry/cache
-/// middleware do the right thing when unsure.
-fn method_semantics(method: &str) -> (bool, bool) {
-    match method {
-        "GET" | "HEAD" | "OPTIONS" | "TRACE" => (true, true),
-        "PUT" | "DELETE" => (false, true),
-        _ => (false, false),
-    }
 }
 
 /// Whether a parameter's type ref resolves to a `TypeDef::Array`. Drives

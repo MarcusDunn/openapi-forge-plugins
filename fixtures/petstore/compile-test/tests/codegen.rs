@@ -137,22 +137,6 @@ async fn response_other_4xx_falls_to_range() {
     assert_eq!(err.code, 418);
 }
 
-/// Bug #12: HTTP method semantics surface on the trait. GET ops are safe +
-/// idempotent; PUT is idempotent but not safe; POST is neither. The
-/// generated code wires these to method-dependent constants.
-#[test]
-fn method_semantics_consts() {
-    assert!(ListPets::IS_SAFE);
-    assert!(ListPets::IS_IDEMPOTENT);
-
-    assert!(!ReplacePet::IS_SAFE);
-    assert!(ReplacePet::IS_IDEMPOTENT);
-
-    use compile_test::gen::operations::CreatePet;
-    assert!(!CreatePet::IS_SAFE);
-    assert!(!CreatePet::IS_IDEMPOTENT);
-}
-
 /// Bug #11: per-operation types are re-exported at `gen::operations` root,
 /// so callers don't have to know the snake-case submodule path. The
 /// imports at the top of this file already exercise this — assert here
