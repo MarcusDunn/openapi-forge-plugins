@@ -97,7 +97,7 @@ jobs:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/
       - name: Install forge CLI
-        uses: MarcusDunn/openapi-forge@v0.1.11
+        uses: MarcusDunn/openapi-forge@main
       - name: forge generate fixtures/${{ matrix.fixture }}
         run: forge generate fixtures/${{ matrix.fixture }}
       - name: cargo test
