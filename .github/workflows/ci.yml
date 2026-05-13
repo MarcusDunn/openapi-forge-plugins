@@ -85,10 +85,9 @@ jobs:
             plugins: "generator-rust-tower"
     steps:
       - uses: actions/checkout@v4
-      # Latest stable for the forge CLI install — its transitive `wasmtime`
-      # needs rustc ≥ 1.92. The plugin builds in `build-plugins` stay pinned
-      # to 1.87.
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.87.0"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: "fixtures/${{ matrix.fixture }}/compile-test -> target"
@@ -98,11 +97,7 @@ jobs:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/
       - name: Install forge CLI
-        # The crate is `openapi-forge-cli` (the bare `forge-cli` name was
-        # already taken on crates.io); the installed binary is still `forge`.
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: cargo install openapi-forge-cli --version "^0.1.9" --locked
+        uses: MarcusDunn/openapi-forge@main
       - name: forge generate fixtures/${{ matrix.fixture }}
         run: forge generate fixtures/${{ matrix.fixture }}
       - name: cargo test
