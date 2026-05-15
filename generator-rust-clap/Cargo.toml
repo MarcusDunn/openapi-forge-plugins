@@ -1,0 +1,18 @@
+[package]
+name = "generator-rust-clap"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI Forge generator that emits a Rust CLI crate using clap derive."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["generator"] }
+serde = { workspace = true }
+
+[lints.rust]
+unsafe_code = "deny"

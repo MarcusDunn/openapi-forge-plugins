@@ -3,6 +3,13 @@ resolver = "2"
 members = [
     "transformer-filter-operations",
     "generator-rust-tower",
+    "generator-rust-clap",
+]
+# The clap fixture's `out/` is a complete CLI crate (Cargo.toml + src/main.rs
+# emitted by `forge generate`). Without exclusion, cargo refuses to build it
+# because the file isn't listed in `members` and it isn't its own workspace.
+exclude = [
+    "fixtures/clap-petstore/out",
 ]
 
 # Plugin crates ship as public OCI WASM components at

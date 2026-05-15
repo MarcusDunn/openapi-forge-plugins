@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Override the package / bin name. Defaults to a kebab-case form of info.title."
+    },
+    "baseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Override the API base URL. Falls back to servers[0].url."
+    },
+    "oauth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientId"],
+      "properties": {
+        "clientId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "OAuth client ID; never derivable from the spec."
+        },
+        "schemeId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Spec security-scheme id to target when multiple oauth2.authorizationCode flows are declared."
+        },
+        "redirectPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Loopback port used as the OAuth redirect URI. Defaults to 8848."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Scope override. Defaults to the union of per-op scopes referencing the chosen oauth2 scheme."
+        },
+        "clientSecretEnv": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Env var the generated CLI reads at runtime for the client secret. When set, the CLI sends `Authorization: Basic` on every token-endpoint call (treats the client as confidential). Required for IdPs that mandate client auth for RFC 8693 token exchange (e.g. Keycloak 26 standard token exchange)."
+        }
+      }
+    }
+  }
+}
