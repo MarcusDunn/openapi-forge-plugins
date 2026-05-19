@@ -81,8 +81,20 @@ jobs:
         include:
           - fixture: petstore
             plugins: "generator-rust-tower + transformer-filter-operations"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
           - fixture: json-value
             plugins: "generator-rust-tower"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
+          # generator-rust-clap emits a complete CLI crate (Cargo.toml +
+          # src/main.rs). The generated `out/` *is* the buildable crate, so
+          # there's no separate `compile-test/` wrapper — we just `cargo
+          # build` the generated crate.
+          - fixture: clap-petstore
+            plugins: "generator-rust-clap"
+            work_dir: out
+            cargo_cmd: build
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -90,7 +102,7 @@ jobs:
           toolchain: "1.87.0"
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "fixtures/${{ matrix.fixture }}/compile-test -> target"
+          workspaces: "fixtures/${{ matrix.fixture }}/${{ matrix.work_dir }} -> target"
       - name: Download wasm artifacts
         uses: actions/download-artifact@v4
         with:
@@ -100,6 +112,6 @@ jobs:
         uses: MarcusDunn/openapi-forge@main
       - name: forge generate fixtures/${{ matrix.fixture }}
         run: forge generate fixtures/${{ matrix.fixture }}
-      - name: cargo test
-        working-directory: fixtures/${{ matrix.fixture }}/compile-test
-        run: cargo test --no-fail-fast
+      - name: cargo ${{ matrix.cargo_cmd }}
+        working-directory: fixtures/${{ matrix.fixture }}/${{ matrix.work_dir }}
+        run: cargo ${{ matrix.cargo_cmd }}

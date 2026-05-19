@@ -44,11 +44,18 @@ jobs:
           oras push \
             "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" \
             target/wasm32-wasip2/release/transformer_filter_operations.wasm:application/vnd.bytecodealliance.wasm.component.layer.v0+wasm
+      - name: Push generator-rust-clap
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          oras push \
+            "ghcr.io/marcusdunn/generator-rust-clap:${TAG}" \
+            target/wasm32-wasip2/release/generator_rust_clap.wasm:application/vnd.bytecodealliance.wasm.component.layer.v0+wasm
       - name: Smoke-check that the OCI artifacts are pullable
         run: |
           TAG="${GITHUB_REF_NAME}"
           oras manifest fetch "ghcr.io/marcusdunn/generator-rust-tower:${TAG}" > /dev/null
           oras manifest fetch "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" > /dev/null
+          oras manifest fetch "ghcr.io/marcusdunn/generator-rust-clap:${TAG}" > /dev/null
       - name: Document follow-up
         run: |
           echo "::notice::Mark the GHCR packages as public via the repo settings UI after the first release."

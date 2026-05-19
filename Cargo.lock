@@ -63,6 +63,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "generator-rust-clap"
+version = "0.1.10"
+dependencies = [
+ "forge-plugin-sdk",
+ "serde",
+]
+
+[[package]]
 name = "generator-rust-tower"
 version = "0.1.10"
 dependencies = [

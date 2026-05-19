@@ -8,6 +8,7 @@ distributed as public OCI WASM components.
 | Plugin | OCI ref | Purpose |
 |---|---|---|
 | [`generator-rust-tower`](generator-rust-tower/) | `ghcr.io/marcusdunn/generator-rust-tower:<tag>` | Emit a Rust client where each operation is one `impl Operation` block against a tiny `Operation` trait. Drives the operations through any `tower::Service<http::Request<…>>` the caller supplies. |
+| [`generator-rust-clap`](generator-rust-clap/) | `ghcr.io/marcusdunn/generator-rust-clap:<tag>` | Emit a complete Rust CLI crate (`clap` derive + `reqwest`). One subcommand per operation, grouped by tag; OAuth 2.0 PKCE login when the spec declares an `authorizationCode` flow; shell completions; `--body-schema` / `--response-schema` discovery flags. |
 | [`transformer-filter-operations`](transformer-filter-operations/) | `ghcr.io/marcusdunn/transformer-filter-operations:<tag>` | Keep only a configured set of `operationId`s (and the named types they transitively reach). Drops everything else. |
 
 The generator emits the `Operation` trait and an `execute` helper inline

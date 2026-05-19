@@ -1,0 +1,8 @@
+[input]
+spec = "spec.json"
+
+[generator]
+wasm = "../../target/wasm32-wasip2/release/generator_rust_clap.wasm"
+
+[output]
+dir = "out"
