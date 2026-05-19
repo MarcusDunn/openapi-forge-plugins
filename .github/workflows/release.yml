@@ -56,6 +56,16 @@ jobs:
           oras manifest fetch "ghcr.io/marcusdunn/generator-rust-tower:${TAG}" > /dev/null
           oras manifest fetch "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" > /dev/null
           oras manifest fetch "ghcr.io/marcusdunn/generator-rust-clap:${TAG}" > /dev/null
+      # Retag the freshly-pushed versioned digests as `:latest`. Done after
+      # the smoke-check so `:latest` only moves when all three artifacts are
+      # confirmed pullable — keeps `:latest` from pointing at a partial
+      # release if any push step ever fails.
+      - name: Retag :latest
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          oras tag "ghcr.io/marcusdunn/generator-rust-tower:${TAG}" latest
+          oras tag "ghcr.io/marcusdunn/transformer-filter-operations:${TAG}" latest
+          oras tag "ghcr.io/marcusdunn/generator-rust-clap:${TAG}" latest
       - name: Document follow-up
         run: |
           echo "::notice::Mark the GHCR packages as public via the repo settings UI after the first release."
