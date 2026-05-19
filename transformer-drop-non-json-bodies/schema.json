@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "transformer-drop-non-json-bodies config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "extra_json_media_types": {
+      "type": "array",
+      "description": "Additional media types (exact match) to treat as JSON-shaped on top of the defaults (`application/json` and any `application/*+json` structured-syntax suffix). Use for vendor-specific JSON dialects like `application/x-amz-json-1.1`.",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "default": []
+    }
+  }
+}

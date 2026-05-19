@@ -296,6 +296,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "transformer-drop-non-json-bodies"
+version = "0.1.10"
+dependencies = [
+ "forge-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "transformer-filter-operations"
 version = "0.1.10"
 dependencies = [

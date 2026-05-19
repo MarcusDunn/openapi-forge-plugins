@@ -1,0 +1,16 @@
+[package]
+name = "transformer-drop-non-json-bodies"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI Forge transformer that drops operations whose request body has no JSON-shaped content type. Lets JSON-only generators (e.g. generator-rust-tower) build cleanly on specs that mix multipart / image uploads alongside JSON endpoints."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["transformer"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
