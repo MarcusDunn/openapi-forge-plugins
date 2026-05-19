@@ -1,17 +1,13 @@
-//! `generator-rust-tower` — emits a tower-based Rust client module tree from
-//! an IR produced by the openapi-forge parser.
+//! `generator-rust-tower` — WIT/WASM plugin shim around the shared
+//! [`codegen_rust_tower`] codegen library.
 //!
-//! The output is a self-contained module tree (no Cargo.toml): every
-//! operation lands as `impl Operation` against the trait defined in
-//! `runtime.rs`, which is emitted inline. Consumers drop the tree into an
-//! existing crate via `pub mod gen;` (or any name) and supply the
-//! `tower::Service<http::Request<…>>` instance to drive operations through.
+//! All of the rendering logic lives in `codegen-rust-tower`; this crate
+//! only adapts the canonical IR / `GenerationOutput` to/from the WIT
+//! types and exports the WASM component the host loads.
 
 #![forbid(unsafe_code)]
 
-mod emit;
-mod operation_impl;
-
+use codegen_rust_tower::Outcome;
 use forge_plugin_sdk::convert::generator as conv;
 use forge_plugin_sdk::generator::exports::forge::plugin::generator_api::{
     GenerationOutput as WitGenerationOutput, Guest,
@@ -19,11 +15,6 @@ use forge_plugin_sdk::generator::exports::forge::plugin::generator_api::{
 use forge_plugin_sdk::generator::forge::plugin::stage::StageError;
 use forge_plugin_sdk::generator::forge::plugin::types::{Ir as WitIr, PluginInfo as WitPluginInfo};
 use forge_plugin_sdk::ir;
-
-/// Pure entry point. Operates on the canonical IR.
-pub fn generate(spec: &ir::Ir) -> emit::Outcome {
-    emit::all(spec)
-}
 
 struct RustTower;
 
@@ -41,9 +32,9 @@ impl Guest for RustTower {
 
     fn generate(spec: WitIr, _config: String) -> Result<WitGenerationOutput, StageError> {
         let canonical = conv::ir_from_wit(spec);
-        match generate(&canonical) {
-            emit::Outcome::Generated(out) => Ok(conv::generation_output_to_wit(out)),
-            emit::Outcome::Rejected(diagnostics) => Err(conv::rejected(
+        match codegen_rust_tower::all(&canonical) {
+            Outcome::Generated(out) => Ok(conv::generation_output_to_wit(out)),
+            Outcome::Rejected(diagnostics) => Err(conv::rejected(
                 "generator-rust-tower: one or more types are not representable in Rust",
                 diagnostics,
             )),

@@ -42,6 +42,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codegen-rust-tower"
+version = "0.1.10"
+dependencies = [
+ "codegen-rust-serde",
+ "forge-plugin-sdk",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -87,14 +99,8 @@ dependencies = [
 name = "generator-rust-tower"
 version = "0.1.10"
 dependencies = [
- "codegen-rust-serde",
+ "codegen-rust-tower",
  "forge-plugin-sdk",
- "prettyplease",
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "syn",
 ]
 
 [[package]]

@@ -1,0 +1,19 @@
+[package]
+name = "codegen-rust-tower"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared IR → Rust tower-client codegen: per-operation `impl Operation` blocks, runtime trait, file emission. Consumed by openapi-forge generator plugins that need a tower-based HTTP client."
+
+[dependencies]
+codegen-rust-serde = { path = "../codegen-rust-serde" }
+forge-plugin-sdk = { workspace = true, features = ["generator"] }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing"] }
+prettyplease = "0.2"
+
+[lints.rust]
+unsafe_code = "deny"
