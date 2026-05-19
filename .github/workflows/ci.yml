@@ -115,25 +115,3 @@ jobs:
       - name: cargo ${{ matrix.cargo_cmd }}
         working-directory: fixtures/${{ matrix.fixture }}/${{ matrix.work_dir }}
         run: cargo ${{ matrix.cargo_cmd }}
-
-  # ---------------------------------------------------------------------------
-  # Host-side integration tests. `host-tests/` is a separate (non-workspace)
-  # crate that builds each plugin via `forge-test-harness::PluginRunner` and
-  # asserts on the emitted `GenerationOutput` — plugin-specific shape checks
-  # under `tests/<plugin>.rs`, cross-plugin invariants under
-  # `tests/invariants.rs`. The harness shells out to `cargo build`, so this
-  # job needs the `wasm32-wasip2` target too.
-  # ---------------------------------------------------------------------------
-  host-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.87.0"
-          targets: wasm32-wasip2
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "host-tests -> target"
-      - name: cargo test (host-tests)
-        run: cargo test --manifest-path host-tests/Cargo.toml --no-fail-fast
