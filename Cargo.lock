@@ -67,7 +67,11 @@ name = "generator-rust-clap"
 version = "0.1.10"
 dependencies = [
  "forge-plugin-sdk",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
  "serde",
+ "syn",
 ]
 
 [[package]]
