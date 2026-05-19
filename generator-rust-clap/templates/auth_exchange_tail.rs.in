@@ -1,0 +1,90 @@
+
+
+// ---------------------------------------------------------------------------
+// RFC 8693 standard token exchange — tenant / per-audience access tokens.
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use tokio::sync::Mutex;
+
+static EXCHANGE_CACHE: tokio::sync::OnceCell<Mutex<HashMap<String, StoredToken>>> =
+    tokio::sync::OnceCell::const_new();
+
+async fn cache() -> &'static Mutex<HashMap<String, StoredToken>> {
+    EXCHANGE_CACHE
+        .get_or_init(|| async { Mutex::new(HashMap::new()) })
+        .await
+}
+
+/// Returns a Bearer scoped to `audience` for the given `profile`.
+/// Performs RFC 8693 standard token exchange against the token URL on
+/// first use per (profile, audience) and caches the result in-process.
+/// Refreshes lazily on a 30s skew.
+pub async fn audience_access_token(
+    profile: &str,
+    audience: &str,
+    resource: Option<&str>,
+    extra_scope: Option<&str>,
+) -> Result<Option<String>> {
+    let cache_key = format!("{profile}\x00{audience}");
+    {
+        let map = cache().await.lock().await;
+        if let Some(tok) = map.get(&cache_key) {
+            let now = now_secs();
+            let stale = tok.expires_at.map(|e| e.saturating_sub(REFRESH_SKEW_SECS) <= now).unwrap_or(false);
+            if !stale {
+                return Ok(Some(tok.access_token.clone()));
+            }
+        }
+    }
+
+    let Some(subject) = access_token(profile).await? else {
+        return Ok(None);
+    };
+
+    let http = reqwest::Client::new();
+    let mut form: Vec<(&str, String)> = vec![
+        ("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange".into()),
+        ("subject_token", subject.clone()),
+        ("subject_token_type", "urn:ietf:params:oauth:token-type:access_token".into()),
+        ("requested_token_type", "urn:ietf:params:oauth:token-type:access_token".into()),
+        ("audience", audience.to_string()),
+    ];
+    if let Some(r) = resource {
+        form.push(("resource", r.to_string()));
+    }
+    if let Some(sc) = extra_scope.filter(|s| !s.is_empty()) {
+        form.push(("scope", sc.to_string()));
+    }
+    if resolve_client_secret_value(profile)?.is_none() {
+        form.push(("client_id", resolve_client_id(profile)?));
+    }
+    let req = http.post(resolve_token_url(profile)?).form(&form);
+    let req = maybe_client_auth(req, profile);
+    let resp = req.send().await.context("posting RFC 8693 token exchange")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        bail!(
+            "token exchange {status}: {body}\n\
+             (audience={audience}; if the IdP requires client authentication, \
+             set the `{}` env var to the client secret OR add `client_secret` \
+             to the `[profiles.{}]` block of `<config_dir>/config.toml`)",
+            CLIENT_SECRET_ENV,
+            profile,
+        );
+    }
+    let tr: TokenResponse = resp.json().await.context("parsing exchange response")?;
+    let now = now_secs();
+    let stored = StoredToken {
+        access_token: tr.access_token.clone(),
+        refresh_token: tr.refresh_token,
+        token_type: tr.token_type.unwrap_or_else(|| "bearer".into()),
+        expires_at: tr.expires_in.map(|s| now + s),
+        obtained_at: now,
+        scope: tr.scope,
+    };
+    let bearer = stored.access_token.clone();
+    cache().await.lock().await.insert(cache_key, stored);
+    Ok(Some(bearer))
+}
