@@ -1,24 +1,134 @@
 //! Generation entry point. Emits a buildable Rust CLI crate (clap
-//! derive + reqwest) with tag-grouped subcommands. When the spec
-//! plus plugin config opt in, the emitted CLI also supports OAuth
-//! 2.0 PKCE login/logout and optional RFC-8693 token exchange driven
-//! by a generic `x-token-exchange` extension on the chosen `oauth2`
-//! security scheme.
+//! derive + hyper-util + tower) with tag-grouped subcommands. The
+//! HTTP-client layer is the tower module tree produced by
+//! [`codegen_rust_tower`], dropped under `src/gen/`; this generator
+//! adds the CLI surface, per-op dispatch into that tree, and (when
+//! configured) OAuth 2.0 PKCE login/logout plus RFC-8693 token
+//! exchange driven by an `x-token-exchange` extension on the chosen
+//! `oauth2` security scheme.
 
 use std::collections::BTreeSet;
 
+use codegen_rust_serde::naming::{pascal_case, snake_case};
+use codegen_rust_serde::types::{type_ref_to_rust, ModelsPath};
 use forge_plugin_sdk::ir::{
-    Body, HttpMethod, Ir, OAuth2Flow, OAuth2FlowKind, Operation, Parameter, SecurityScheme,
-    SecuritySchemeKind,
+    Body, Ir, OAuth2Flow, OAuth2FlowKind, Operation, Parameter, Response, ResponseStatus,
+    SecurityScheme, SecuritySchemeKind, TypeDef,
 };
 use forge_plugin_sdk::{values_ext, GenerationOutput, OutputFile};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::config::{Config, OAuthConfig};
-use crate::naming::{kebab_case, pascal_case, screaming_snake, snake_case};
+use crate::naming::{kebab_case, screaming_snake};
 use crate::schema;
 use crate::tags::{self, TagGroup, TagTree};
+
+/// Outcome of a generation pass. Mirrors [`codegen_rust_tower::Outcome`]
+/// — the embedded tower codegen can reject if the spec references types
+/// that don't model in Rust (bare `null`, unresolved `$ref`, …); we
+/// surface that as a `StageError::Rejected` from the plugin's WIT entry
+/// point.
+pub enum Outcome {
+    Generated(GenerationOutput),
+    Rejected(Vec<forge_plugin_sdk::ir::Diagnostic>),
+}
+
+/// Path prefix for `quote!` to reach the tower codegen's `models` module
+/// from the CLI's `main.rs`. The generated tree lives at `src/gen/` and
+/// `main.rs` declares it as `mod gen;`.
+fn gen_models_path() -> ModelsPath {
+    quote! { gen::models }
+}
+
+/// Shape of a CLI field for one IR parameter.
+///
+/// `cli_ty` is what the clap `#[derive(Args)]` struct sees; primitives
+/// (`String`, `i32`, …) clap parses natively, anything else falls back
+/// to `String` and we round-trip through `serde_json` at dispatch
+/// time. Arrays render as `Vec<inner>` so clap treats them as repeated
+/// flags (matching the tower codegen's `Vec<T>` request-struct fields
+/// and OpenAPI 3's `style=form, explode=true` default).
+struct CliArgShape {
+    /// Rust type to put in the CLI struct field.
+    cli_ty: TokenStream,
+    /// True when the param's underlying type isn't natively
+    /// clap-parseable and the dispatch arm must `serde_json`-decode the
+    /// CLI string into the target Rust type.
+    needs_runtime_parse: bool,
+    /// True when the param is array-shaped (`Vec<inner>` in the CLI).
+    is_array: bool,
+}
+
+fn cli_arg_shape(spec: &Ir, type_ref: &str) -> CliArgShape {
+    let named = spec.types.iter().find(|t| t.id == type_ref);
+    if let Some(named) = named {
+        if let TypeDef::Array(a) = &named.definition {
+            let inner_native = is_clap_native(spec, &a.items);
+            let inner_ty = if inner_native {
+                type_ref_to_rust(spec, &a.items, &gen_models_path())
+            } else {
+                quote!(String)
+            };
+            return CliArgShape {
+                cli_ty: quote!(Vec<#inner_ty>),
+                needs_runtime_parse: !inner_native,
+                is_array: true,
+            };
+        }
+        if matches!(named.definition, TypeDef::Primitive(_)) {
+            return CliArgShape {
+                cli_ty: type_ref_to_rust(spec, type_ref, &gen_models_path()),
+                needs_runtime_parse: false,
+                is_array: false,
+            };
+        }
+    }
+    // Enums, complex objects, unions, etc. — CLI takes a String; we
+    // decode via serde_json at dispatch (`PetStatus` decodes from a
+    // quoted JSON string, etc.).
+    CliArgShape {
+        cli_ty: quote!(String),
+        needs_runtime_parse: true,
+        is_array: false,
+    }
+}
+
+fn is_clap_native(spec: &Ir, type_ref: &str) -> bool {
+    spec.types
+        .iter()
+        .find(|t| t.id == type_ref)
+        .is_some_and(|t| matches!(t.definition, TypeDef::Primitive(_)))
+}
+
+/// Emit the expression that converts a CLI struct field into the value
+/// the tower request struct expects. Encapsulates the four-axis cross
+/// product of (required × relax-active × native × array).
+fn cli_to_target_expr(shape: &CliArgShape, ident: &proc_macro2::Ident, kebab: &str) -> TokenStream {
+    // Required + relax path: clap guarantees `Some` when we reach the
+    // call branch; reuse this for both the "the CLI struct field is
+    // T-with-relax" path and the "the field is Vec<T> requiring at
+    // least one element" check would go here too. We accept empty
+    // arrays since clap can't natively express `1..` together with
+    // `required_unless_present_any`.
+    let _ = kebab;
+    if shape.is_array {
+        if shape.needs_runtime_parse {
+            return quote! {
+                #ident
+                    .into_iter()
+                    .map(|__s| serde_json::from_value(serde_json::Value::String(__s)))
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            };
+        }
+        return quote! { #ident };
+    }
+    if shape.needs_runtime_parse {
+        quote! { serde_json::from_value(serde_json::Value::String(#ident))? }
+    } else {
+        quote! { #ident }
+    }
+}
 
 const GEN_HEADER: &str =
     "// Generated by openapi-forge / generator-rust-clap; do not edit by hand.\n\n";
@@ -33,12 +143,33 @@ fn render_file(tokens: TokenStream) -> String {
     format!("{GEN_HEADER}{}", prettyplease::unparse(&file))
 }
 
-pub fn all(ir: &Ir, cfg: &Config) -> GenerationOutput {
+pub fn all(ir: &Ir, cfg: &Config) -> Outcome {
+    // Build the tower-client tree first — if it rejects, surface that
+    // before doing any of the CLI work (so callers see the typing
+    // failure, not "the spec also doesn't fit the CLI" derivative).
+    let tower = match codegen_rust_tower::all(ir) {
+        codegen_rust_tower::Outcome::Generated(out) => out,
+        codegen_rust_tower::Outcome::Rejected(diagnostics) => {
+            return Outcome::Rejected(diagnostics);
+        }
+    };
+
     let bin_name = bin_name(ir, cfg);
     let pkg_name = format!("{bin_name}-cli");
     let oauth = detect_oauth(ir, cfg);
 
-    let mut files = vec![
+    // Move the tower files under `src/gen/` so they sit beside the
+    // hand-rolled CLI sources and `mod gen;` in main.rs picks them up.
+    let mut files: Vec<OutputFile> = tower
+        .files
+        .into_iter()
+        .map(|f| OutputFile {
+            path: format!("src/gen/{}", f.path),
+            content: f.content,
+            mode: f.mode,
+        })
+        .collect();
+    files.extend([
         OutputFile::text(
             "Cargo.toml",
             emit_cargo_toml(&pkg_name, &bin_name, oauth.is_some()),
@@ -47,10 +178,9 @@ pub fn all(ir: &Ir, cfg: &Config) -> GenerationOutput {
             "src/main.rs",
             emit_main_rs(ir, cfg, &bin_name, oauth.as_ref()),
         ),
-        OutputFile::text("src/client.rs", emit_client_rs(ir)),
         OutputFile::text("src/runtime.rs", emit_runtime_rs()),
         OutputFile::text("README.md", emit_readme(ir, &bin_name, oauth.as_ref())),
-    ];
+    ]);
     if let Some(oa) = &oauth {
         files.push(OutputFile::text(
             "src/auth.rs",
@@ -58,10 +188,10 @@ pub fn all(ir: &Ir, cfg: &Config) -> GenerationOutput {
         ));
     }
 
-    GenerationOutput {
+    Outcome::Generated(GenerationOutput {
         files,
-        diagnostics: vec![],
-    }
+        diagnostics: tower.diagnostics,
+    })
 }
 
 fn bin_name(ir: &Ir, cfg: &Config) -> String {
@@ -238,8 +368,12 @@ fn op_uses_placeholder(op: &Operation, placeholder: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 fn emit_cargo_toml(pkg_name: &str, bin_name: &str, oauth: bool) -> String {
+    // OAuth flows (PKCE login, token refresh, RFC 8693 exchange) still
+    // ride on reqwest. Switching auth.rs to hyper-util is a separate
+    // refactor; for now we accept the extra dep when OAuth is opted in.
     let oauth_block = if oauth {
-        r#"sha2 = "0.10"
+        r#"reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 webbrowser = "1"
@@ -268,8 +402,16 @@ tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "net", "io-ut
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 anyhow = "1"
-reqwest = {{ version = "0.12", default-features = false, features = ["json", "rustls-tls"] }}
-urlencoding = "2"
+# Tower-driven HTTP client wiring for the generated `gen/` tree.
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+tower = {{ version = "0.5", features = ["util"] }}
+thiserror = "2"
+hyper = "1"
+hyper-util = {{ version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }}
+hyper-rustls = {{ version = "0.27", default-features = false, features = ["http1", "http2", "ring", "webpki-roots", "webpki-tokio"] }}
 {oauth_block}"#
     )
 }
@@ -370,6 +512,7 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
         }
     } else {
         emit_root_enum(
+            ir,
             &tree,
             oauth_active,
             exchange,
@@ -382,7 +525,7 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
     } else {
         tree.roots
             .iter()
-            .map(|root| emit_group_types(root, "", exchange))
+            .map(|root| emit_group_types(ir, root, "", exchange))
             .collect()
     };
 
@@ -524,13 +667,20 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
         }
         _ => quote!(),
     };
+    // `__base_url` (String) and `__http_client` (the tower::Service
+    // base) are constructed once per main() and reused by every
+    // dispatch arm; each arm wraps `__http_client` in an `ApiService`
+    // with the per-op bearer.
     let client_init = if oauth_active {
         quote! {
-            let __base_url = auth::resolve_base_url(&cli.profile, cli.base_url.as_deref())?;
-            let client = ApiClient::new(__base_url)?;
+            let __base_url: String = auth::resolve_base_url(&cli.profile, cli.base_url.as_deref())?;
+            let __http_client = runtime::build_http_client()?;
         }
     } else {
-        quote! { let client = ApiClient::new(cli.base_url)?; }
+        quote! {
+            let __base_url: String = cli.base_url.clone();
+            let __http_client = runtime::build_http_client()?;
+        }
     };
 
     let mut match_arms: Vec<TokenStream> =
@@ -552,7 +702,7 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
         match_arms.push(quote!(Cmd::Noop => return Ok(()),));
     } else {
         for root in &tree.roots {
-            match_arms.push(emit_root_match_arms(root, "", oauth, exchange));
+            match_arms.push(emit_root_match_arms(ir, root, "", oauth, exchange));
         }
     }
 
@@ -577,12 +727,12 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
     let mod_decls = if oauth_active {
         quote! {
             mod auth;
-            mod client;
+            mod gen;
             mod runtime;
         }
     } else {
         quote! {
-            mod client;
+            mod gen;
             mod runtime;
         }
     };
@@ -598,7 +748,6 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
         #mod_decls
 
         use clap::{Args, CommandFactory, Parser, Subcommand};
-        use client::ApiClient;
         use runtime::OutputMode;
 
         #schema_consts
@@ -638,6 +787,7 @@ fn emit_main_rs(ir: &Ir, cfg: &Config, bin_name: &str, oauth: Option<&OauthInfo>
 }
 
 fn emit_root_enum(
+    spec: &Ir,
     tree: &TagTree,
     oauth_active: bool,
     exchange: Option<&TokenExchangeInfo>,
@@ -704,7 +854,7 @@ fn emit_root_enum(
             if root.is_misc() {
                 root.direct_ops
                     .iter()
-                    .map(|op| render_op_variant(op, exchange))
+                    .map(|op| render_op_variant(spec, op, exchange))
                     .collect::<Vec<_>>()
             } else {
                 let variant = format_ident!("{}", pascal_case(&root.name));
@@ -764,6 +914,7 @@ fn emit_root_enum(
 }
 
 fn emit_group_types(
+    spec: &Ir,
     group: &TagGroup,
     prefix: &str,
     exchange: Option<&TokenExchangeInfo>,
@@ -790,14 +941,14 @@ fn emit_group_types(
             group
                 .direct_ops
                 .iter()
-                .map(|op| render_op_variant(op, exchange)),
+                .map(|op| render_op_variant(spec, op, exchange)),
         )
         .collect();
 
     let child_types: TokenStream = group
         .children
         .iter()
-        .map(|child| emit_group_types(child, &q, exchange))
+        .map(|child| emit_group_types(spec, child, &q, exchange))
         .collect();
 
     quote! {
@@ -818,6 +969,7 @@ fn emit_group_types(
 }
 
 fn emit_root_match_arms(
+    spec: &Ir,
     root: &TagGroup,
     prefix: &str,
     oauth: Option<&OauthInfo>,
@@ -827,12 +979,12 @@ fn emit_root_match_arms(
         let arms = root
             .direct_ops
             .iter()
-            .map(|op| render_op_match_arm(op, &format_ident!("Cmd"), oauth, exchange));
+            .map(|op| render_op_match_arm(spec, op, &format_ident!("Cmd"), oauth, exchange));
         return quote!(#(#arms)*);
     }
     let variant = format_ident!("{}", pascal_case(&root.name));
     let q = qualified_pascal(prefix, &root.name);
-    let inner = emit_group_match_arms(root, &q, oauth, exchange);
+    let inner = emit_group_match_arms(spec, root, &q, oauth, exchange);
     quote! {
         Cmd::#variant(__g) => match __g.cmd {
             #inner
@@ -841,6 +993,7 @@ fn emit_root_match_arms(
 }
 
 fn emit_group_match_arms(
+    spec: &Ir,
     group: &TagGroup,
     q: &str,
     oauth: Option<&OauthInfo>,
@@ -853,7 +1006,7 @@ fn emit_group_match_arms(
         .map(|child| {
             let child_variant = format_ident!("{}", pascal_case(&child.name));
             let child_q = qualified_pascal(q, &child.name);
-            let inner = emit_group_match_arms(child, &child_q, oauth, exchange);
+            let inner = emit_group_match_arms(spec, child, &child_q, oauth, exchange);
             quote! {
                 #cmd_ty::#child_variant(__g) => match __g.cmd {
                     #inner
@@ -864,7 +1017,7 @@ fn emit_group_match_arms(
     let op_arms: Vec<TokenStream> = group
         .direct_ops
         .iter()
-        .map(|op| render_op_match_arm(op, &cmd_ty, oauth, exchange))
+        .map(|op| render_op_match_arm(spec, op, &cmd_ty, oauth, exchange))
         .collect();
     quote! {
         #(#child_arms)*
@@ -872,13 +1025,17 @@ fn emit_group_match_arms(
     }
 }
 
-fn render_op_variant(op: &Operation, exchange: Option<&TokenExchangeInfo>) -> TokenStream {
+fn render_op_variant(
+    spec: &Ir,
+    op: &Operation,
+    exchange: Option<&TokenExchangeInfo>,
+) -> TokenStream {
     let variant = format_ident!("{}", pascal_case(&op.id));
     let doc_attr = first_line(op.documentation.as_deref()).map(|d| quote!(#[doc = #d]));
     let exclude = exchange
         .filter(|ex| op_uses_placeholder(op, &ex.placeholder))
         .map(|ex| ex.placeholder.as_str());
-    let fields = collect_fields(op, exclude);
+    let fields = collect_fields(spec, op, exclude);
     if fields.is_empty() {
         quote!(#doc_attr #variant,)
     } else {
@@ -888,13 +1045,16 @@ fn render_op_variant(op: &Operation, exchange: Option<&TokenExchangeInfo>) -> To
 }
 
 fn render_op_match_arm(
+    spec: &Ir,
     op: &Operation,
     cmd_ty: &proc_macro2::Ident,
     oauth: Option<&OauthInfo>,
     exchange: Option<&TokenExchangeInfo>,
 ) -> TokenStream {
     let variant = format_ident!("{}", pascal_case(&op.id));
-    let method_ident = format_ident!("{}", snake_case(&op.id));
+    let op_struct = quote! { gen::operations::#variant };
+    let output_ty = format_ident!("{}Output", pascal_case(&op.id));
+    let output_path = quote! { gen::operations::#output_ty };
 
     // Bearer resolution per op. Three modes:
     //   - this op references the placeholder ⇒ resolve via RFC 8693
@@ -910,7 +1070,7 @@ fn render_op_match_arm(
     };
     let exclude_snake = exclude.map(snake_case);
 
-    let destruct_fields = collect_fields(op, exclude);
+    let destruct_fields = collect_fields(spec, op, exclude);
     let destruct = if destruct_fields.is_empty() {
         quote!()
     } else {
@@ -924,45 +1084,140 @@ fn render_op_match_arm(
     // `.expect(...)` on the actual API-call branch since clap
     // guarantees Some by then.
     let relax_active = !relax_unless(op).is_empty();
-    let mut call_args: Vec<TokenStream> = vec![quote!(__bearer.as_deref())];
-    for p in &op.path_params {
+
+    // Build the request-struct field initializers. Each entry is
+    // `<snake_field>: <expr>` where <expr> turns the CLI struct field
+    // (which may be the typed value, `Option<typed>`, `Vec<typed>`, or
+    // `String` for non-clap-native types) into the tower request
+    // struct's declared field type.
+    let mut field_inits: Vec<TokenStream> = Vec::new();
+    let push_param = |inits: &mut Vec<TokenStream>, p: &Parameter, is_path: bool| {
         let ident = format_ident!("{}", snake_case(&p.name));
-        if exclude_snake
-            .as_deref()
-            .is_some_and(|s| s == snake_case(&p.name))
+        if is_path
+            && exclude_snake
+                .as_deref()
+                .is_some_and(|s| s == snake_case(&p.name))
         {
-            call_args.push(quote!(__slug.clone()));
-        } else if relax_active {
-            let msg = format!("<{}> required", kebab_case(&p.name));
-            call_args.push(quote!(#ident.expect(#msg)));
-        } else {
-            call_args.push(quote!(#ident));
+            inits.push(quote!(#ident: __slug.clone()));
+            return;
         }
-    }
-    let push_flag_args = |args: &mut Vec<TokenStream>, params: &[Parameter]| {
-        for p in params {
-            let ident = format_ident!("{}", snake_case(&p.name));
-            if p.required && relax_active {
-                let msg = format!("--{} required", kebab_case(&p.name));
-                args.push(quote!(#ident.expect(#msg)));
+        let shape = cli_arg_shape(spec, &p.r#type);
+        let kebab = kebab_case(&p.name);
+        let val = cli_to_target_expr(&shape, &ident, &kebab);
+        if shape.is_array {
+            // Vec<T> in CLI → Vec<T> in target. No Option wrap.
+            inits.push(quote!(#ident: #val));
+        } else if (is_path || p.required) && !relax_active {
+            // Required, no relax — CLI field is the typed value directly.
+            inits.push(quote!(#ident: #val));
+        } else if p.required && relax_active {
+            // Required + relax — CLI field is `Option<typed>`; clap
+            // guarantees `Some` on the call branch.
+            let msg = if is_path {
+                format!("<{kebab}> required")
             } else {
-                args.push(quote!(#ident));
+                format!("--{kebab} required")
+            };
+            // `cli_to_target_expr` was generated assuming the binding
+            // names the inner value; bind the unwrapped option to that
+            // name via `let`, then run the conversion.
+            let local = format_ident!("__opt_{}", snake_case(&p.name));
+            let conv = cli_to_target_expr(&shape, &local, &kebab);
+            inits.push(quote! {
+                #ident: {
+                    let #local = #ident.expect(#msg);
+                    #conv
+                }
+            });
+        } else {
+            // Optional — CLI field is `Option<typed>`; target field
+            // is `Option<typed>` too.
+            if shape.needs_runtime_parse {
+                let inner_local = format_ident!("__inner_{}", snake_case(&p.name));
+                let inner_conv = cli_to_target_expr(&shape, &inner_local, &kebab);
+                inits.push(quote! {
+                    #ident: match #ident {
+                        Some(#inner_local) => Some(#inner_conv),
+                        None => None,
+                    }
+                });
+            } else {
+                inits.push(quote!(#ident: #ident));
             }
         }
     };
-    push_flag_args(&mut call_args, &op.query_params);
-    push_flag_args(&mut call_args, &op.header_params);
-    push_flag_args(&mut call_args, &op.cookie_params);
-    if let Some(b) = &op.request_body {
-        if b.required {
-            // clap's `required_unless_present_any` guarantees `body` is
-            // `Some` whenever we reach the API call branch.
-            call_args.push(quote!(body.expect("--body required")));
+
+    for p in &op.path_params {
+        push_param(&mut field_inits, p, /*is_path=*/ true);
+    }
+    for p in &op.query_params {
+        push_param(&mut field_inits, p, false);
+    }
+    for p in &op.header_params {
+        push_param(&mut field_inits, p, false);
+    }
+    // Cookie params have no tower-side representation today; the tower
+    // codegen ignores them. Skip silently for now to keep the surface
+    // matching the generated request struct.
+    let _ = op.cookie_params.len();
+
+    if let Some(body) = &op.request_body {
+        let body_type_ref = body
+            .content
+            .iter()
+            .find(|c| {
+                let m = c.media_type.to_ascii_lowercase();
+                m.starts_with("application/json")
+                    || m.strip_prefix("application/")
+                        .is_some_and(|r| r.ends_with("+json"))
+            })
+            .map(|c| c.r#type.clone());
+        let body_ty_tokens = match &body_type_ref {
+            Some(tr) => type_ref_to_rust(spec, tr, &gen_models_path()),
+            None => quote!(serde_json::Value),
+        };
+        if body.required {
+            // `--body` is `Option<String>` in the CLI struct with
+            // `required_unless_present_any` covering the schema-flag
+            // branches; on the call branch clap guarantees `Some`.
+            field_inits.push(quote! {
+                body: {
+                    let __body_str = body.expect("--body required");
+                    let __body_val = runtime::parse_body_arg(&__body_str)?;
+                    serde_json::from_value::<#body_ty_tokens>(__body_val)?
+                }
+            });
         } else {
-            call_args.push(quote!(body));
+            field_inits.push(quote! {
+                body: match body {
+                    Some(__body_str) => {
+                        let __body_val = runtime::parse_body_arg(&__body_str)?;
+                        Some(serde_json::from_value::<#body_ty_tokens>(__body_val)?)
+                    }
+                    None => None,
+                }
+            });
         }
     }
-    let call = quote!(client.#method_ident(#(#call_args),*).await?);
+
+    let build_op = quote! {
+        let __op = #op_struct {
+            #(#field_inits,)*
+        };
+    };
+
+    let execute_and_decode = render_execute_and_decode(op, &output_path);
+    let call = quote! {
+        #build_op
+        let mut __svc = runtime::ApiService {
+            inner: __http_client.clone(),
+            base_url: __base_url.clone(),
+            bearer: __bearer.clone(),
+        };
+        let __out = gen::execute(&mut __svc, __op).await
+            .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+        #execute_and_decode
+    };
 
     let (pre_let, bearer_let) = if needs_exchange {
         let ex = exchange.unwrap();
@@ -1072,6 +1327,168 @@ fn render_op_match_arm(
     }
 }
 
+/// Build the `match __out { … }` expression that turns the tower op's
+/// typed `Output` enum into a `serde_json::Value` for the CLI's
+/// `print_output`. 2xx variants extract the body (or `Null` for unit
+/// success variants); everything else turns into an `anyhow` error
+/// that surfaces as a non-zero exit code with the body printed to
+/// stderr.
+fn render_execute_and_decode(op: &Operation, output_path: &TokenStream) -> TokenStream {
+    // No declared responses → the tower codegen emits a single
+    // `Success` unit variant matched on any 2xx.
+    if op.responses.is_empty() {
+        return quote! {
+            match __out {
+                #output_path::Success => serde_json::Value::Null,
+            }
+        };
+    }
+
+    let only_default = op.responses.len() == 1
+        && matches!(op.responses[0].status, ResponseStatus::Default);
+
+    let mut arms: Vec<TokenStream> = Vec::new();
+    for resp in &op.responses {
+        let variant = format_ident!("{}", status_variant(&resp.status));
+        let has_body = pick_json_body(resp).is_some();
+        let success = is_success_status(&resp.status) || (only_default && matches!(resp.status, ResponseStatus::Default));
+        let label = status_label(&resp.status);
+        let arm_pat = if has_body {
+            quote! { #output_path::#variant(__inner) }
+        } else {
+            quote! { #output_path::#variant }
+        };
+        let arm_body = if success {
+            if has_body {
+                quote! { serde_json::to_value(&__inner)? }
+            } else {
+                quote! { serde_json::Value::Null }
+            }
+        } else if has_body {
+            quote! {
+                {
+                    let __json = serde_json::to_value(&__inner)?;
+                    return Err(anyhow::anyhow!("HTTP {}: {}", #label, __json));
+                }
+            }
+        } else {
+            quote! {
+                return Err(anyhow::anyhow!("HTTP {}", #label));
+            }
+        };
+        arms.push(quote! { #arm_pat => #arm_body, });
+    }
+
+    quote! {
+        match __out {
+            #(#arms)*
+        }
+    }
+}
+
+/// Rust variant name on the per-op response enum for a given status.
+/// Mirrors `codegen_rust_tower`'s `status_variant`. Kept in lockstep
+/// by code review; a follow-up could expose this from the shared
+/// crate to avoid drift.
+fn status_variant(s: &ResponseStatus) -> String {
+    match s {
+        ResponseStatus::Explicit { code } => {
+            well_known_variant(*code).unwrap_or_else(|| format!("Status{code}"))
+        }
+        ResponseStatus::Range { class } => match class {
+            1 => "OneXx".to_string(),
+            2 => "TwoXx".to_string(),
+            3 => "ThreeXx".to_string(),
+            4 => "FourXx".to_string(),
+            5 => "FiveXx".to_string(),
+            other => format!("Status{other}xx"),
+        },
+        ResponseStatus::Default => "Default".to_string(),
+    }
+}
+
+fn well_known_variant(code: u16) -> Option<String> {
+    let n = match code {
+        100 => "Continue",
+        101 => "SwitchingProtocols",
+        200 => "Ok",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "NonAuthoritativeInformation",
+        204 => "NoContent",
+        205 => "ResetContent",
+        206 => "PartialContent",
+        300 => "MultipleChoices",
+        301 => "MovedPermanently",
+        302 => "Found",
+        303 => "SeeOther",
+        304 => "NotModified",
+        307 => "TemporaryRedirect",
+        308 => "PermanentRedirect",
+        400 => "BadRequest",
+        401 => "Unauthorized",
+        402 => "PaymentRequired",
+        403 => "Forbidden",
+        404 => "NotFound",
+        405 => "MethodNotAllowed",
+        406 => "NotAcceptable",
+        407 => "ProxyAuthenticationRequired",
+        408 => "RequestTimeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "LengthRequired",
+        412 => "PreconditionFailed",
+        413 => "PayloadTooLarge",
+        414 => "RequestUriTooLong",
+        415 => "UnsupportedMediaType",
+        416 => "RangeNotSatisfiable",
+        417 => "ExpectationFailed",
+        422 => "UnprocessableEntity",
+        425 => "TooEarly",
+        426 => "UpgradeRequired",
+        428 => "PreconditionRequired",
+        429 => "TooManyRequests",
+        431 => "RequestHeaderFieldsTooLarge",
+        500 => "InternalServerError",
+        501 => "NotImplemented",
+        502 => "BadGateway",
+        503 => "ServiceUnavailable",
+        504 => "GatewayTimeout",
+        505 => "HttpVersionNotSupported",
+        _ => return None,
+    };
+    Some(n.to_string())
+}
+
+/// Human-readable status label for error messages (`"400"`, `"4XX"`,
+/// `"default"`).
+fn status_label(s: &ResponseStatus) -> String {
+    match s {
+        ResponseStatus::Explicit { code } => code.to_string(),
+        ResponseStatus::Range { class } => format!("{class}XX"),
+        ResponseStatus::Default => "default".to_string(),
+    }
+}
+
+fn is_success_status(s: &ResponseStatus) -> bool {
+    matches!(
+        s,
+        ResponseStatus::Explicit { code: 200..=299 } | ResponseStatus::Range { class: 2 }
+    )
+}
+
+fn pick_json_body(resp: &Response) -> Option<&str> {
+    resp.content
+        .iter()
+        .find(|c| {
+            let m = c.media_type.to_ascii_lowercase();
+            m.starts_with("application/json")
+                || m.strip_prefix("application/")
+                    .is_some_and(|r| r.ends_with("+json"))
+        })
+        .map(|c| c.r#type.as_str())
+}
+
 struct Field {
     ident: proc_macro2::Ident,
     ty: TokenStream,
@@ -1087,7 +1504,7 @@ fn field_to_tokens(f: &Field) -> TokenStream {
     quote!(#doc_attr #arg_attr #ident: #ty,)
 }
 
-fn collect_fields(op: &Operation, exclude_path_param: Option<&str>) -> Vec<Field> {
+fn collect_fields(spec: &Ir, op: &Operation, exclude_path_param: Option<&str>) -> Vec<Field> {
     let mut out = Vec::new();
     let exclude_snake = exclude_path_param.map(snake_case);
     let relax = relax_unless(op);
@@ -1098,16 +1515,16 @@ fn collect_fields(op: &Operation, exclude_path_param: Option<&str>) -> Vec<Field
         {
             continue;
         }
-        out.push(field_for_param(p, FieldKind::Positional, &relax));
+        out.push(field_for_param(spec, p, FieldKind::Positional, &relax));
     }
     for p in &op.query_params {
-        out.push(field_for_param(p, FieldKind::Flag, &relax));
+        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
     }
     for p in &op.header_params {
-        out.push(field_for_param(p, FieldKind::Flag, &relax));
+        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
     }
     for p in &op.cookie_params {
-        out.push(field_for_param(p, FieldKind::Flag, &relax));
+        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
     }
     if let Some(body) = &op.request_body {
         out.push(field_for_body(body, &relax));
@@ -1139,34 +1556,51 @@ enum FieldKind {
     Flag,
 }
 
-fn field_for_param(p: &Parameter, kind: FieldKind, relax: &[&str]) -> Field {
+fn field_for_param(spec: &Ir, p: &Parameter, kind: FieldKind, relax: &[&str]) -> Field {
     let ident = format_ident!("{}", snake_case(&p.name));
     let kebab = kebab_case(&p.name);
     let relax_active = !relax.is_empty();
     let relax_lits: Vec<&&str> = relax.iter().collect();
+    let shape = cli_arg_shape(spec, &p.r#type);
+    let typed = &shape.cli_ty;
 
-    let (ty, arg_attr) = match (kind, p.required) {
-        (FieldKind::Positional, _) => {
-            if relax_active {
-                (
-                    quote!(Option<String>),
-                    Some(quote!(required_unless_present_any = [#(#relax_lits),*])),
-                )
-            } else {
-                (quote!(String), None)
+    // Arrays always render as `Vec<T>` regardless of `required` / relax:
+    // clap interprets `Vec<T>` as "0+ occurrences"; missing-required
+    // arrays are surfaced at dispatch time, not at parse time. This
+    // mirrors how the tower request struct declares them (`Vec<T>`,
+    // unconditionally) and matches the OpenAPI 3 default.
+    let (ty, arg_attr) = if shape.is_array {
+        let attr = match kind {
+            FieldKind::Positional => quote!(),
+            FieldKind::Flag => quote!(long = #kebab),
+        };
+        (typed.clone(), Some(attr))
+    } else {
+        match (kind, p.required) {
+            (FieldKind::Positional, _) => {
+                if relax_active {
+                    (
+                        quote!(Option<#typed>),
+                        Some(quote!(required_unless_present_any = [#(#relax_lits),*])),
+                    )
+                } else {
+                    (typed.clone(), None)
+                }
             }
-        }
-        (FieldKind::Flag, true) => {
-            if relax_active {
-                (
-                    quote!(Option<String>),
-                    Some(quote!(long = #kebab, required_unless_present_any = [#(#relax_lits),*])),
-                )
-            } else {
-                (quote!(String), Some(quote!(long = #kebab)))
+            (FieldKind::Flag, true) => {
+                if relax_active {
+                    (
+                        quote!(Option<#typed>),
+                        Some(
+                            quote!(long = #kebab, required_unless_present_any = [#(#relax_lits),*]),
+                        ),
+                    )
+                } else {
+                    (typed.clone(), Some(quote!(long = #kebab)))
+                }
             }
+            (FieldKind::Flag, false) => (quote!(Option<#typed>), Some(quote!(long = #kebab))),
         }
-        (FieldKind::Flag, false) => (quote!(Option<String>), Some(quote!(long = #kebab))),
     };
     Field {
         ident,
@@ -1326,246 +1760,6 @@ fn qualified_pascal(prefix: &str, name: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// src/client.rs
-// ---------------------------------------------------------------------------
-
-fn emit_client_rs(ir: &Ir) -> String {
-    let methods = ir.operations.iter().map(render_client_method);
-    render_file(quote! {
-        #![allow(clippy::too_many_arguments, clippy::needless_borrow)]
-
-        use anyhow::{anyhow, Context, Result};
-        use serde_json::Value;
-
-        use crate::runtime::parse_body_arg;
-
-        pub struct ApiClient {
-            http: reqwest::Client,
-            base_url: String,
-        }
-
-        impl ApiClient {
-            pub fn new(base_url: String) -> Result<Self> {
-                Ok(Self {
-                    http: reqwest::Client::builder().build()?,
-                    base_url: base_url.trim_end_matches('/').to_string(),
-                })
-            }
-
-            fn req(
-                &self,
-                token: Option<&str>,
-                method: reqwest::Method,
-                path: &str,
-            ) -> reqwest::RequestBuilder {
-                let mut b = self
-                    .http
-                    .request(method, format!("{}{}", self.base_url, path));
-                if let Some(t) = token {
-                    b = b.bearer_auth(t);
-                }
-                b
-            }
-
-            #(#methods)*
-        }
-    })
-}
-
-fn render_client_method(op: &Operation) -> TokenStream {
-    let method_ident = format_ident!("{}", snake_case(&op.id));
-    let http_method = method_token(&op.method);
-
-    // Function signature: __bearer first, then path/query/header/cookie
-    // params, then optional body. `path_params` are always required
-    // String; for the rest, required → String, optional → Option<String>.
-    let mut sig_args: Vec<TokenStream> = vec![quote!(__bearer: Option<&str>)];
-    for p in &op.path_params {
-        let ident = format_ident!("{}", snake_case(&p.name));
-        sig_args.push(quote!(#ident: String));
-    }
-    let push_optionable = |args: &mut Vec<TokenStream>, params: &[Parameter]| {
-        for p in params {
-            let ident = format_ident!("{}", snake_case(&p.name));
-            if p.required {
-                args.push(quote!(#ident: String));
-            } else {
-                args.push(quote!(#ident: Option<String>));
-            }
-        }
-    };
-    push_optionable(&mut sig_args, &op.query_params);
-    push_optionable(&mut sig_args, &op.header_params);
-    push_optionable(&mut sig_args, &op.cookie_params);
-    if let Some(body) = &op.request_body {
-        if body.required {
-            sig_args.push(quote!(body: String));
-        } else {
-            sig_args.push(quote!(body: Option<String>));
-        }
-    }
-
-    let (path_fmt, path_args) = render_path_interpolation(&op.path_template, &op.path_params);
-    let path_decl = if path_args.is_empty() {
-        quote!(let __path = String::from(#path_fmt);)
-    } else {
-        quote!(let __path = format!(#path_fmt, #(#path_args),*);)
-    };
-
-    let query_setters = op.query_params.iter().map(|p| {
-        let ident = format_ident!("{}", snake_case(&p.name));
-        let raw = &p.name;
-        if p.required {
-            quote!(__r = __r.query(&[(#raw, &#ident)]);)
-        } else {
-            quote!(
-                if let Some(v) = &#ident {
-                    __r = __r.query(&[(#raw, v)]);
-                }
-            )
-        }
-    });
-    let header_setters = op.header_params.iter().map(|p| {
-        let ident = format_ident!("{}", snake_case(&p.name));
-        let raw = &p.name;
-        if p.required {
-            quote!(__r = __r.header(#raw, &#ident);)
-        } else {
-            quote!(
-                if let Some(v) = &#ident {
-                    __r = __r.header(#raw, v);
-                }
-            )
-        }
-    });
-
-    let cookie_block = if op.cookie_params.is_empty() {
-        quote!()
-    } else {
-        let pushes = op.cookie_params.iter().map(|p| {
-            let ident = format_ident!("{}", snake_case(&p.name));
-            let raw_eq = format!("{}={{}}", p.name);
-            if p.required {
-                quote!(__cookies.push(format!(#raw_eq, urlencoding::encode(&#ident)));)
-            } else {
-                quote!(
-                    if let Some(v) = &#ident {
-                        __cookies.push(format!(#raw_eq, urlencoding::encode(v)));
-                    }
-                )
-            }
-        });
-        quote! {
-            let mut __cookies: Vec<String> = Vec::new();
-            #(#pushes)*
-            if !__cookies.is_empty() {
-                __r = __r.header("Cookie", __cookies.join("; "));
-            }
-        }
-    };
-
-    let body_block = match &op.request_body {
-        Some(b) if b.required => quote! {
-            let __body_value = parse_body_arg(&body).context("--body")?;
-            __r = __r.json(&__body_value);
-        },
-        Some(_) => quote! {
-            if let Some(s) = &body {
-                let v = parse_body_arg(s).context("--body")?;
-                __r = __r.json(&v);
-            }
-        },
-        None => quote!(),
-    };
-
-    let doc_attr = first_line(op.documentation.as_deref())
-        .map(|d| quote!(#[doc = #d]))
-        .unwrap_or_default();
-
-    quote! {
-        #doc_attr
-        pub async fn #method_ident(&self, #(#sig_args),*) -> Result<Value> {
-            #path_decl
-            let mut __r = self.req(__bearer, #http_method, &__path);
-            #(#query_setters)*
-            #(#header_setters)*
-            #cookie_block
-            #body_block
-            let __resp = __r.send().await.context("sending request")?;
-            let __status = __resp.status();
-            let __text = __resp.text().await.context("reading response")?;
-            let __json: Value = if __text.is_empty() {
-                Value::Null
-            } else {
-                serde_json::from_str(&__text).unwrap_or(Value::String(__text.clone()))
-            };
-            if !__status.is_success() {
-                return Err(anyhow!("HTTP {}: {}", __status, __json));
-            }
-            Ok(__json)
-        }
-    }
-}
-
-fn method_token(m: &HttpMethod) -> TokenStream {
-    match m {
-        HttpMethod::Get => quote!(reqwest::Method::GET),
-        HttpMethod::Post => quote!(reqwest::Method::POST),
-        HttpMethod::Put => quote!(reqwest::Method::PUT),
-        HttpMethod::Delete => quote!(reqwest::Method::DELETE),
-        HttpMethod::Patch => quote!(reqwest::Method::PATCH),
-        HttpMethod::Options => quote!(reqwest::Method::OPTIONS),
-        HttpMethod::Head => quote!(reqwest::Method::HEAD),
-        HttpMethod::Trace => quote!(reqwest::Method::TRACE),
-        // Mirror the previous string-emit behavior: unknown verbs fall
-        // back to GET. (TODO: surface a diagnostic instead.)
-        HttpMethod::Other(_) => quote!(reqwest::Method::GET),
-    }
-}
-
-/// Walk a `/foo/{bar}/baz` style path, returning the printf-style
-/// template and the expression list that fills it. Unknown `{x}`
-/// placeholders (not in `path_params`) are passed through verbatim,
-/// double-braced so `format!` doesn't try to interpolate them.
-fn render_path_interpolation(
-    template: &str,
-    path_params: &[Parameter],
-) -> (String, Vec<TokenStream>) {
-    let mut out_template = String::with_capacity(template.len());
-    let mut args = Vec::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '{' {
-            let mut name = String::new();
-            for c2 in chars.by_ref() {
-                if c2 == '}' {
-                    break;
-                }
-                name.push(c2);
-            }
-            let snake = snake_case(&name);
-            if path_params.iter().any(|p| snake_case(&p.name) == snake) {
-                out_template.push_str("{}");
-                let ident = format_ident!("{}", snake);
-                args.push(quote!(urlencoding::encode(&#ident)));
-            } else {
-                // Pass through literal `{name}` — `format!` would
-                // misinterpret a single brace, so double them.
-                out_template.push_str("{{");
-                out_template.push_str(&name);
-                out_template.push_str("}}");
-            }
-        } else if c == '}' {
-            // Standalone `}` is unusual but mirror upstream behavior.
-            out_template.push('}');
-        } else {
-            out_template.push(c);
-        }
-    }
-    (out_template, args)
-}
-
-// ---------------------------------------------------------------------------
 // src/runtime.rs
 // ---------------------------------------------------------------------------
 
@@ -1712,8 +1906,19 @@ mod tests {
     #[test]
     fn configure_variant_exposes_non_interactive_flags() {
         // Empty tag tree is enough to drive emit_root_enum into the oauth branch.
+        // The empty tree means `render_op_variant` is never called, so the spec
+        // doesn't need to carry any operations; a minimal stub satisfies the
+        // signature.
         let tree = TagTree { roots: vec![] };
-        let tokens = emit_root_enum(&tree, /*oauth_active*/ true, None, None, None);
+        let ir: Ir = forge_plugin_sdk::serde_json::from_value(forge_plugin_sdk::serde_json::json!({
+            "info": {"title": "", "version": ""},
+            "operations": [],
+            "types": [],
+            "security_schemes": [],
+            "servers": [],
+        }))
+        .expect("minimal IR stub deserializes");
+        let tokens = emit_root_enum(&ir, &tree, /*oauth_active*/ true, None, None, None);
         // TokenStream → String drops formatting but preserves identifiers
         // and punctuation, which is all this test asserts on.
         let out = tokens.to_string();

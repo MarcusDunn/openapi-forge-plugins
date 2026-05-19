@@ -11,6 +11,8 @@ description = "OpenAPI Forge generator that emits a Rust CLI crate using clap de
 crate-type = ["cdylib"]
 
 [dependencies]
+codegen-rust-serde = { path = "../codegen-rust-serde" }
+codegen-rust-tower = { path = "../codegen-rust-tower" }
 forge-plugin-sdk = { workspace = true, features = ["generator"] }
 serde = { workspace = true }
 proc-macro2 = "1"
