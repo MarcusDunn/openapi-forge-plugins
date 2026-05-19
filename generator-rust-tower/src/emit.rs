@@ -10,9 +10,8 @@ use forge_plugin_sdk::{FileMode, GenerationOutput, OutputFile};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::diagnostics;
-use crate::models;
-use crate::naming;
+use codegen_rust_serde::{diagnostics, models, naming};
+
 use crate::operation_impl;
 
 const MOD_RS: &str = include_str!("../templates/mod.rs.in");

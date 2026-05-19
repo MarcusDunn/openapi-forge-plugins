@@ -1,0 +1,16 @@
+[package]
+name = "codegen-rust-serde"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared IR → Rust codegen: serde-derived models, type lowering, naming, diagnostics. Consumed by openapi-forge generator plugins."
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["generator"] }
+proc-macro2 = "1"
+quote = "1"
+
+[lints.rust]
+unsafe_code = "deny"

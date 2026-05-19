@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "codegen-rust-serde",
     "transformer-filter-operations",
     "generator-rust-tower",
     "generator-rust-clap",

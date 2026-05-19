@@ -28,14 +28,14 @@ pub type ModelsPath = TokenStream;
 pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath) -> TokenStream {
     if type_ref == ir::NULL_ID {
         diagnostics::report_fatal(diag::error(
-            "rust-tower/type-fallback-null",
+            "rust-serde/type-fallback-null",
             "bare `null`-typed reference at use site has no Rust representation",
         ));
         return quote! { serde_json::Value };
     }
     let Some(named) = spec.types.iter().find(|t| t.id == type_ref) else {
         diagnostics::report_fatal(diag::error(
-            "rust-tower/type-fallback-unresolved",
+            "rust-serde/type-fallback-unresolved",
             format!("unresolved type reference `{type_ref}`"),
         ));
         return quote! { serde_json::Value };
@@ -75,7 +75,7 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             } else {
                 let variants: Vec<&str> = u.variants.iter().map(|v| v.r#type.as_str()).collect();
                 diagnostics::report_fatal(diag::error(
-                    "rust-tower/inline-union-unnamed",
+                    "rust-serde/inline-union-unnamed",
                     format!(
                         "inline multi-variant union of {} variants {:?} has no schema name to \
                          hoist to a Rust enum. Promote this `oneOf` to a named schema in \
@@ -90,7 +90,7 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
         }
         ir::TypeDef::Null => {
             diagnostics::report_fatal(diag::error(
-                "rust-tower/type-fallback-null-def",
+                "rust-serde/type-fallback-null-def",
                 format!("named type `{}` resolves to `null`", named.id),
             ));
             quote! { serde_json::Value }

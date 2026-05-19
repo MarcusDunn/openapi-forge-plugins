@@ -14,10 +14,10 @@ use forge_plugin_sdk::ir;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::diagnostics;
-use crate::models::doc_attrs;
-use crate::naming;
-use crate::types::{self, type_ref_to_rust, ModelsPath};
+use codegen_rust_serde::diagnostics;
+use codegen_rust_serde::models::doc_attrs;
+use codegen_rust_serde::naming;
+use codegen_rust_serde::types::{self, type_ref_to_rust, ModelsPath};
 
 fn models_path() -> ModelsPath {
     quote! { super::super::models }
