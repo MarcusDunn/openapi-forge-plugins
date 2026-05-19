@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "codegen-rust-serde",
     "codegen-rust-tower",
+    "transformer-drop-non-json-bodies",
     "transformer-filter-operations",
     "generator-rust-tower",
     "generator-rust-clap",
