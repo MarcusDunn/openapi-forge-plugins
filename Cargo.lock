@@ -87,6 +87,8 @@ dependencies = [
 name = "generator-rust-clap"
 version = "0.1.10"
 dependencies = [
+ "codegen-rust-serde",
+ "codegen-rust-tower",
  "forge-plugin-sdk",
  "prettyplease",
  "proc-macro2",

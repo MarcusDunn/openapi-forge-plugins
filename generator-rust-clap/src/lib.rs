@@ -1,10 +1,10 @@
 //! `generator-rust-clap` — emits a Rust CLI crate (clap derive +
-//! reqwest) for an OpenAPI spec.
+//! tower/hyper-util) for an OpenAPI spec.
 //!
-//! Status: Phase 0 iteration 1 — emits a buildable flat clap CLI with
-//! one subcommand per operation, but handlers print TODO instead of
-//! making HTTP calls. Real HTTP, model emission, tag grouping, and
-//! OAuth land in subsequent iterations (see plan).
+//! The CLI's HTTP client is a tower-driven module tree produced by
+//! [`codegen_rust_tower`]; this crate adds the clap subcommand surface,
+//! per-op dispatch into that client, optional OAuth 2.0 PKCE
+//! login/logout, and optional RFC 8693 token exchange.
 
 #![forbid(unsafe_code)]
 
@@ -24,7 +24,7 @@ use forge_plugin_sdk::ir;
 
 pub use config::Config;
 
-pub fn generate(spec: &ir::Ir, cfg: &Config) -> forge_plugin_sdk::GenerationOutput {
+pub fn generate(spec: &ir::Ir, cfg: &Config) -> emit::Outcome {
     emit::all(spec, cfg)
 }
 
@@ -50,8 +50,13 @@ impl Guest for RustClap {
                 .map_err(|e| conv::config_invalid(e.to_string()))?
         };
         let canonical = conv::ir_from_wit(spec);
-        let out = generate(&canonical, &cfg);
-        Ok(conv::generation_output_to_wit(out))
+        match generate(&canonical, &cfg) {
+            emit::Outcome::Generated(out) => Ok(conv::generation_output_to_wit(out)),
+            emit::Outcome::Rejected(diagnostics) => Err(conv::rejected(
+                "generator-rust-clap: one or more types are not representable in Rust",
+                diagnostics,
+            )),
+        }
     }
 }
 
