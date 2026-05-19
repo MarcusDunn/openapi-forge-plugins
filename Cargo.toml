@@ -10,6 +10,10 @@ members = [
 # because the file isn't listed in `members` and it isn't its own workspace.
 exclude = [
     "fixtures/clap-petstore/out",
+    # Host-side integration tests for the generator plugins. Builds only
+    # for the developer's host (depends on the wasmtime-based forge-host
+    # runtime); kept out of `cargo build --target wasm32-wasip2`.
+    "host-tests",
 ]
 
 # Plugin crates ship as public OCI WASM components at
