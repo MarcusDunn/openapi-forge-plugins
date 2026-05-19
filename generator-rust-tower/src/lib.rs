@@ -9,12 +9,8 @@
 
 #![forbid(unsafe_code)]
 
-mod diagnostics;
 mod emit;
-mod models;
-mod naming;
 mod operation_impl;
-mod types;
 
 use forge_plugin_sdk::convert::generator as conv;
 use forge_plugin_sdk::generator::exports::forge::plugin::generator_api::{
