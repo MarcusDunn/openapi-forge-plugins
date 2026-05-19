@@ -26,6 +26,13 @@ pub fn report_fatal(d: Diagnostic) {
     SINK.with(|cell| cell.borrow_mut().push(d));
 }
 
+/// Append a non-fatal diagnostic (warning / info / hint). Surfaces to
+/// the consumer via `GenerationOutput.diagnostics` but does not flip
+/// the `Outcome::Rejected` switch.
+pub fn report(d: Diagnostic) {
+    SINK.with(|cell| cell.borrow_mut().push(d));
+}
+
 /// Take and clear the per-invocation sink. Call once at the end of
 /// `emit::all`.
 pub fn drain() -> Vec<Diagnostic> {

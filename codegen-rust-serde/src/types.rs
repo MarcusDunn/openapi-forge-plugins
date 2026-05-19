@@ -66,27 +66,27 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             if let Some(inner) = nullable_inner(spec, u, models_path) {
                 return inner;
             }
-            // Anything else must be a user-named union — the def site
-            // emits a `#[serde(untagged)]` enum in `models.rs` and we
-            // refer to it by name here. Synthesized inline multi-variant
-            // unions have no name to reference, so they're a fatal error.
-            if named.original_name.is_some() {
-                named_type_path(models_path, &naming::rust_type_name(named))
-            } else {
+            // Multi-variant unions become a `#[serde(untagged)]` enum at
+            // the def site. User-named unions use their original name;
+            // synthesized inline unions get hoisted under the parser's
+            // assigned id (e.g. `<op>_response_<code>_variant_<n>`) and
+            // emit a warning so the consumer knows the name is generator-
+            // derived rather than from their spec.
+            if named.original_name.is_none() {
                 let variants: Vec<&str> = u.variants.iter().map(|v| v.r#type.as_str()).collect();
-                diagnostics::report_fatal(diag::error(
-                    "rust-serde/inline-union-unnamed",
+                diagnostics::report(diag::warning(
+                    "rust-serde/inline-union-synthesized",
                     format!(
-                        "inline multi-variant union of {} variants {:?} has no schema name to \
-                         hoist to a Rust enum. Promote this `oneOf` to a named schema in \
-                         `components/schemas` so the generator can emit \
-                         `#[derive(Serialize, Deserialize)] #[serde(untagged)] pub enum ...`.",
+                        "inline multi-variant union of {} variants {:?} has no schema name; \
+                         hoisting to a Rust enum named `{}`. Promote this `oneOf` to a named \
+                         schema in `components/schemas` to control the type name.",
                         u.variants.len(),
-                        variants
+                        variants,
+                        naming::rust_type_name(named),
                     ),
                 ));
-                quote! { serde_json::Value }
             }
+            named_type_path(models_path, &naming::rust_type_name(named))
         }
         ir::TypeDef::Null => {
             diagnostics::report_fatal(diag::error(

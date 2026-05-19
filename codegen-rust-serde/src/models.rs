@@ -129,16 +129,21 @@ fn unique_variant_names(spec: &ir::Ir, u: &ir::UnionType) -> Vec<String> {
 }
 
 /// Decide whether a `NamedType` earns its keep as a definition in
-/// `models.rs`. Synthesized per-property aliases (their `original_name` is
-/// `None`) are parser bookkeeping — the use site inlines the same
-/// expression — so they get filtered out.
+/// `models.rs`. Synthesized per-property *primitive / array* aliases
+/// (their `original_name` is `None`) are parser bookkeeping — the use
+/// site inlines the same expression — so they get filtered out.
+///
+/// Unions are different: synthesized inline unions (e.g. anonymous
+/// `oneOf` in a response body) still need a concrete `#[serde(untagged)]
+/// pub enum` to land in `models.rs`, because use sites refer to them
+/// by name (`type_ref_to_rust` emits `models::<rust_type_name>`).
+/// Without that emission the use site would dangle.
 fn should_emit_named(named: &ir::NamedType) -> bool {
     match &named.definition {
         ir::TypeDef::Object(o) => types::additional_properties_only(o).is_none(),
         ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) => true,
-        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Union(_) => {
-            named.original_name.is_some()
-        }
+        ir::TypeDef::Union(_) => true,
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) => named.original_name.is_some(),
         ir::TypeDef::Null => false,
     }
 }
