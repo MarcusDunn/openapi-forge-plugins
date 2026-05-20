@@ -407,6 +407,145 @@ fn op_uses_placeholder(op: &Operation, placeholder: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// `x-pagination` extension
+// ---------------------------------------------------------------------------
+
+/// Per-op pagination contract, resolved from the `x-pagination`
+/// extension. Drives the `--pages N` / `--all-pages` flag emission on
+/// the CLI subcommand and the loop-vs-single-call branch in the
+/// dispatch arm.
+///
+/// Spec example:
+/// ```yaml
+/// x-pagination:
+///   queryParam: nextPageToken     # name of the cursor query param
+///   tokenPath: /nextPageToken     # JSON Pointer (RFC 6901) into the 2xx body
+/// ```
+struct PaginationConfig {
+    /// The cursor query param's snake-cased Rust identifier — used
+    /// to mutate `__op.#cursor_field_ident = Some(token)` between
+    /// iterations.
+    cursor_field_ident: proc_macro2::Ident,
+    /// JSON Pointer (RFC 6901) string, e.g. `"/nextPageToken"` or
+    /// `"/pagination/cursor"`. Resolved at runtime against the
+    /// `serde_json::Value` view of each page's success body.
+    token_pointer: String,
+}
+
+/// Inspect `op.extensions` for an `x-pagination` entry and return a
+/// resolved `PaginationConfig` if it's well-formed AND points at a
+/// real query param of string type. Each invalid case below pushes a
+/// non-fatal warning diagnostic and returns `None` so the op falls
+/// back to non-paginated emission — the spec author wrote the
+/// extension expecting it to work, so silently skipping is wrong.
+fn op_pagination(spec: &Ir, op: &Operation) -> Option<PaginationConfig> {
+    let (_, vref) = op.extensions.iter().find(|(k, _)| k == "x-pagination")?;
+    let json = values_ext::resolve_to_serde(&spec.values, *vref);
+    let obj = match json.as_object() {
+        Some(o) => o,
+        None => {
+            codegen_rust_serde::diagnostics::report(forge_plugin_sdk::diag::warning(
+                "rust-clap/W-PAGINATION-SHAPE",
+                format!(
+                    "operation `{}`: `x-pagination` must be an object \
+                     (got {}); skipping pagination emission",
+                    op.id,
+                    json_kind(&json)
+                ),
+            ));
+            return None;
+        }
+    };
+    let query_param = obj
+        .get("queryParam")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let token_path = obj
+        .get("tokenPath")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let (query_param, token_pointer) = match (query_param, token_path) {
+        (Some(q), Some(t)) => (q, t),
+        _ => {
+            codegen_rust_serde::diagnostics::report(forge_plugin_sdk::diag::warning(
+                "rust-clap/W-PAGINATION-INCOMPLETE",
+                format!(
+                    "operation `{}`: `x-pagination` requires string fields \
+                     `queryParam` and `tokenPath`; skipping",
+                    op.id
+                ),
+            ));
+            return None;
+        }
+    };
+    if !token_pointer.starts_with('/') {
+        codegen_rust_serde::diagnostics::report(forge_plugin_sdk::diag::warning(
+            "rust-clap/W-PAGINATION-POINTER",
+            format!(
+                "operation `{}`: `tokenPath` must be a JSON Pointer (RFC 6901, \
+                 e.g. `/nextPageToken`); got `{token_pointer}`; skipping",
+                op.id
+            ),
+        ));
+        return None;
+    }
+    let matched_param = op.query_params.iter().find(|p| p.name == query_param);
+    let Some(matched_param) = matched_param else {
+        codegen_rust_serde::diagnostics::report(forge_plugin_sdk::diag::warning(
+            "rust-clap/W-PAGINATION-NO-PARAM",
+            format!(
+                "operation `{}`: `x-pagination.queryParam = \"{query_param}\"` \
+                 doesn't match any of the op's query parameters; skipping",
+                op.id
+            ),
+        ));
+        return None;
+    };
+    if !is_string_typed(spec, &matched_param.r#type) {
+        codegen_rust_serde::diagnostics::report(forge_plugin_sdk::diag::warning(
+            "rust-clap/W-PAGINATION-PARAM-TYPE",
+            format!(
+                "operation `{}`: pagination cursor `{query_param}` must be a \
+                 string-typed query param (the next-page token sets it on \
+                 each iteration); skipping",
+                op.id
+            ),
+        ));
+        return None;
+    }
+    let cursor_field_ident = ident(&snake_case(&matched_param.name));
+    Some(PaginationConfig {
+        cursor_field_ident,
+        token_pointer,
+    })
+}
+
+fn json_kind(v: &forge_plugin_sdk::serde_json::Value) -> &'static str {
+    use forge_plugin_sdk::serde_json::Value;
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn is_string_typed(spec: &Ir, type_ref: &str) -> bool {
+    spec.types.iter().any(|t| {
+        t.id == type_ref
+            && matches!(
+                t.definition,
+                TypeDef::Primitive(forge_plugin_sdk::ir::PrimitiveType {
+                    kind: forge_plugin_sdk::ir::PrimitiveKind::String,
+                    ..
+                })
+            )
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Cargo.toml
 // ---------------------------------------------------------------------------
 
@@ -1261,23 +1400,77 @@ fn render_op_match_arm(
         }
     }
 
-    let build_op = quote! {
-        let __op = #op_struct {
-            #(#field_inits,)*
-        };
-    };
-
     let execute_and_decode = render_execute_and_decode(op, &output_path);
-    let call = quote! {
-        #build_op
-        let mut __svc = runtime::ApiService {
-            inner: __http_client.clone(),
-            base_url: __base_url.clone(),
-            bearer: __bearer.clone(),
-        };
-        let __out = gen::execute(&mut __svc, __op).await
-            .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
-        #execute_and_decode
+
+    // If the op declares an `x-pagination` extension, the build path
+    // forks at runtime on the new flags: with `--pages N` or
+    // `--all-pages`, we loop, extract the next-page token from each
+    // 2xx body via the configured JSON Pointer, and emit a JSON array
+    // of page bodies. Without either flag the dispatch is byte-for-
+    // byte identical to the non-paginated path — single-call, raw
+    // body on stdout.
+    let pagination = op_pagination(spec, op);
+    let call = if let Some(pg) = pagination {
+        let cursor_field = &pg.cursor_field_ident;
+        let token_pointer = &pg.token_pointer;
+        quote! {
+            let __op_template = #op_struct {
+                #(#field_inits,)*
+            };
+            let mut __svc = runtime::ApiService {
+                inner: __http_client.clone(),
+                base_url: __base_url.clone(),
+                bearer: __bearer.clone(),
+            };
+            if all_pages || pages.is_some() {
+                let __cap: u32 = if all_pages { u32::MAX } else { pages.unwrap_or(1) };
+                let mut __pages: Vec<serde_json::Value> = Vec::new();
+                let mut __cursor: Option<String> = None;
+                for __i in 0..__cap {
+                    let mut __op = __op_template.clone();
+                    if __i > 0 {
+                        __op.#cursor_field = __cursor.clone();
+                    }
+                    let __out = gen::execute(&mut __svc, __op).await
+                        .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+                    let __body_value: serde_json::Value = #execute_and_decode;
+                    let __next_str = match __body_value.pointer(#token_pointer) {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(serde_json::Value::String(s)) => Some(s.clone()),
+                        Some(other) => {
+                            return Err(anyhow::anyhow!(
+                                "x-pagination: cursor at `{}` was not a string: {}",
+                                #token_pointer, other
+                            ));
+                        }
+                    };
+                    __pages.push(__body_value);
+                    match __next_str {
+                        Some(t) => __cursor = Some(t),
+                        None => break,
+                    }
+                }
+                serde_json::Value::Array(__pages)
+            } else {
+                let __out = gen::execute(&mut __svc, __op_template).await
+                    .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+                #execute_and_decode
+            }
+        }
+    } else {
+        quote! {
+            let __op = #op_struct {
+                #(#field_inits,)*
+            };
+            let mut __svc = runtime::ApiService {
+                inner: __http_client.clone(),
+                base_url: __base_url.clone(),
+                bearer: __bearer.clone(),
+            };
+            let __out = gen::execute(&mut __svc, __op).await
+                .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+            #execute_and_decode
+        }
     };
 
     let (pre_let, bearer_let) = if needs_exchange {
@@ -1600,7 +1793,40 @@ fn collect_fields(spec: &Ir, op: &Operation, exclude_path_param: Option<&str>) -
     if op_has_response_content(op) {
         out.push(field_for_response_schema());
     }
+    // Pagination flags are emitted only on ops with a well-formed
+    // `x-pagination` extension — keeps non-paginated subcommands clean
+    // and ensures `--all-pages` is unambiguous when present.
+    if op_pagination(spec, op).is_some() {
+        out.push(field_pages());
+        out.push(field_all_pages());
+    }
     out
+}
+
+fn field_pages() -> Field {
+    Field {
+        ident: format_ident!("pages"),
+        ty: quote!(Option<u32>),
+        doc: Some(
+            "Walk up to N pages and emit each as one element of a JSON array on stdout. \
+             Omit for single-page (raw body) output; use `--all-pages` for unlimited."
+                .into(),
+        ),
+        arg_attr: Some(quote!(long = "pages")),
+    }
+}
+
+fn field_all_pages() -> Field {
+    Field {
+        ident: format_ident!("all_pages"),
+        ty: quote!(bool),
+        doc: Some(
+            "Walk every page until the next-page token is missing or null. Overrides `--pages`. \
+             First error stops with non-zero exit; pages already emitted remain on stdout."
+                .into(),
+        ),
+        arg_attr: Some(quote!(long = "all-pages")),
+    }
 }
 
 /// Schema-flag fields that suppress clap's required-arg gate on this

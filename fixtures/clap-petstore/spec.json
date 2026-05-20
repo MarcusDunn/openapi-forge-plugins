@@ -184,6 +184,86 @@
         }
       }
     },
+    "/pets/paginated": {
+      "get": {
+        "operationId": "listPaginatedPets",
+        "summary": "Bug #21: cursor-paginated list. `x-pagination` declares the `nextPageToken` query-param ↔ `/nextPageToken` response-body cursor convention so the clap CLI emits `--pages N` / `--all-pages` flags. The tower client codegen is untouched.",
+        "tags": ["pets"],
+        "x-pagination": {
+          "queryParam": "nextPageToken",
+          "tokenPath": "/nextPageToken"
+        },
+        "parameters": [
+          {
+            "name": "nextPageToken",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the previous page; omit on the first call.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of pets plus an optional next-page cursor (null = last page).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PetsPage" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/nullability-demo": {
+      "get": {
+        "operationId": "getPetNullabilityDemo",
+        "summary": "Bug #20: return a model that exercises every (required × nullable) cross-product so the optional+nullable case round-trips missing / explicit-null / value as distinct states.",
+        "tags": ["pets"],
+        "responses": {
+          "200": {
+            "description": "Showcase of every field-nullability shape",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NullabilityShowcase" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/{petId}/photo": {
+      "get": {
+        "operationId": "downloadPetPhoto",
+        "summary": "Bug #19: binary-body response. The 2xx variant declares `image/png` (non-JSON), so the generator must emit `impl Operation` directly — *not* the JSON-only `JsonOperation` path — otherwise the blanket impl would still buffer-and-then-attempt-decode behavior in future work; today the streaming path leaves the body as a unit variant and doesn't try to decode.",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw PNG bytes",
+            "content": {
+              "image/png": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "404": {
+            "description": "Pet not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/{petId}/problem": {
       "get": {
         "operationId": "getPetProblem",
@@ -243,6 +323,26 @@
         "properties": {
           "code": { "type": "integer", "format": "int32" },
           "message": { "type": "string" }
+        }
+      },
+      "PetsPage": {
+        "type": "object",
+        "description": "Bug #21 fixture: one page of pets plus the next-page cursor.",
+        "required": ["pets"],
+        "properties": {
+          "pets":          { "$ref": "#/components/schemas/Pets" },
+          "nextPageToken": { "type": "string", "nullable": true }
+        }
+      },
+      "NullabilityShowcase": {
+        "type": "object",
+        "description": "Bug #20: every (required × nullable) cross-product. The optional+nullable field (`tristate`) needs `Option<Option<T>>` to keep missing distinguishable from explicit `null` on the wire.",
+        "required": ["always_present", "nullable_required"],
+        "properties": {
+          "always_present":    { "type": "string" },
+          "missing_allowed":   { "type": "string" },
+          "nullable_required": { "type": "string", "nullable": true },
+          "tristate":          { "type": "string", "nullable": true }
         }
       }
     }

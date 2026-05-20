@@ -3,7 +3,7 @@ spec = "spec.json"
 
 [[transformers]]
 wasm = "../../target/wasm32-wasip2/release/transformer_filter_operations.wasm"
-config = { keep = ["listPets", "createPet", "showPetById", "findPetsByTag", "replacePet", "getPetProblem", "downloadPetPhoto", "getPetNullabilityDemo"] }
+config = { keep = ["listPets", "createPet", "showPetById", "findPetsByTag", "replacePet", "getPetProblem", "downloadPetPhoto", "getPetNullabilityDemo", "listPaginatedPets"] }
 
 [generator]
 wasm = "../../target/wasm32-wasip2/release/generator_rust_tower.wasm"
