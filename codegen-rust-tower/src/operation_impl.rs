@@ -239,6 +239,12 @@ fn render_query_block(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
     }
     // OpenAPI 3 defaults `style=form, explode=true` for query params, which
     // means arrays serialize as repeated `key=value` pairs.
+    //
+    // The accumulator is named `__query_buf` (not `query`) so it can't
+    // collide with a query *parameter* whose own name is `query` —
+    // otherwise the param's destructured binding gets shadowed and the
+    // borrow checker rejects `&query.to_string()` next to
+    // `&mut query`.
     let mut emits = TokenStream::new();
     for p in &op.query_params {
         let snake = types::ident(&naming::snake_case(&p.name));
@@ -247,34 +253,34 @@ fn render_query_block(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
         let emit = match (p.required, is_array) {
             (true, true) => quote! {
                 for item in &#snake {
-                    runtime::push_query(&mut query, #key, &item.to_string());
+                    runtime::push_query(&mut __query_buf, #key, &item.to_string());
                 }
             },
             (false, true) => quote! {
                 if let Some(items) = &#snake {
                     for item in items {
-                        runtime::push_query(&mut query, #key, &item.to_string());
+                        runtime::push_query(&mut __query_buf, #key, &item.to_string());
                     }
                 }
             },
             (true, false) => quote! {
-                runtime::push_query(&mut query, #key, &#snake.to_string());
+                runtime::push_query(&mut __query_buf, #key, &#snake.to_string());
             },
             (false, false) => quote! {
                 if let Some(v) = &#snake {
-                    runtime::push_query(&mut query, #key, &v.to_string());
+                    runtime::push_query(&mut __query_buf, #key, &v.to_string());
                 }
             },
         };
         emits.extend(emit);
     }
     quote! {
-        let mut query = String::new();
+        let mut __query_buf = String::new();
         #emits
-        let final_uri = if query.is_empty() {
+        let final_uri = if __query_buf.is_empty() {
             path
         } else {
-            format!("{path}?{query}")
+            format!("{path}?{__query_buf}")
         };
         builder = builder.uri(final_uri.as_str());
     }

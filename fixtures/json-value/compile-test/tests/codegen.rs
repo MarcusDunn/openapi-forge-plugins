@@ -70,6 +70,15 @@ async fn get_value_decodes_all_primitive_variants() {
         (b"42", JsonValue::Number(42.0)),
         (b"3.14", JsonValue::Number(3.14)),
     ];
+    fn variants_match(got: &JsonValue, expected: &JsonValue) -> bool {
+        match (got, expected) {
+            (JsonValue::Null, JsonValue::Null) => true,
+            (JsonValue::String(a), JsonValue::String(b)) => a == b,
+            (JsonValue::Bool(a), JsonValue::Bool(b)) => a == b,
+            (JsonValue::Number(a), JsonValue::Number(b)) => a == b,
+            _ => false,
+        }
+    }
     for (wire, expected) in cases {
         let body = wire.to_vec();
         let mut svc = tower::service_fn(move |_req: http::Request<ReqBody>| {
@@ -78,7 +87,15 @@ async fn get_value_decodes_all_primitive_variants() {
         });
         let out = gen::execute(&mut svc, GetValue {}).await.unwrap();
         let GetValueOutput::Ok(got) = out;
-        assert_eq!(got, expected, "wire={}", std::str::from_utf8(wire).unwrap());
+        // `JsonValue` no longer derives `PartialEq` (PR #12). Compare
+        // by variant shape + primitive equality instead.
+        assert!(
+            variants_match(&got, &expected),
+            "wire={} expected={:?} got={:?}",
+            std::str::from_utf8(wire).unwrap(),
+            expected,
+            got
+        );
     }
 }
 
@@ -182,10 +199,18 @@ async fn envelope_extras_roundtrip() {
     };
     let PostEnvelopeOutput::Ok(echoed) = gen::execute(&mut svc, op).await.unwrap();
     assert_eq!(echoed.name, "flow-42");
-    assert_eq!(echoed.extras["int"], JsonValue::Number(7.0));
-    assert_eq!(echoed.extras["nested"], {
-        let mut m: HashMap<String, JsonValue> = HashMap::new();
-        m.insert("k".into(), JsonValue::Null);
-        JsonValue::Object(m)
-    });
+    // `JsonValue` is a `#[serde(untagged)]` enum whose variants
+    // (`JsonValue_variant_3` / `_4`) carry generated structural types
+    // that don't derive `PartialEq` (PR #12 dropped union-level
+    // `PartialEq` because variant types aren't `PartialEq` in
+    // general). Match the variant shape instead, then compare the
+    // inner primitives directly.
+    assert!(
+        matches!(&echoed.extras["int"], JsonValue::Number(n) if *n == 7.0),
+        "expected int extra to decode as Number(7.0)"
+    );
+    assert!(
+        matches!(&echoed.extras["nested"], JsonValue::Object(m) if matches!(m.get("k"), Some(JsonValue::Null))),
+        "expected nested extra to decode as Object {{k: Null}}"
+    );
 }
