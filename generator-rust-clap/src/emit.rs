@@ -1486,6 +1486,13 @@ fn render_op_match_arm(
                 } else {
                     pages.expect("`pages` is Some when the paginate branch is entered without `--all-pages`")
                 };
+                // `--output ndjson` short-circuits the accumulator and
+                // prints each page body as its own line as soon as it
+                // arrives. Useful for `jq -c` pipelines and for long
+                // walks where buffering hundreds of pages is wasteful.
+                // For `json` / `compact` we keep collecting into one
+                // array, which `print_output` then formats at the end.
+                let __streaming = cli.output == runtime::OutputMode::Ndjson;
                 let mut __pages: Vec<serde_json::Value> = Vec::new();
                 let mut __cursor: Option<String> = None;
                 for __i in 0..__cap {
@@ -1515,13 +1522,30 @@ fn render_op_match_arm(
                             ));
                         }
                     };
-                    __pages.push(__body_value);
+                    if __streaming {
+                        // Compact one-line JSON per page; flush so a
+                        // long walk shows progress in real time rather
+                        // than buffering in stdio.
+                        use std::io::Write as _;
+                        let mut __stdout = std::io::stdout().lock();
+                        serde_json::to_writer(&mut __stdout, &__body_value)?;
+                        __stdout.write_all(b"\n")?;
+                        __stdout.flush()?;
+                    } else {
+                        __pages.push(__body_value);
+                    }
                     match __next_str {
                         Some(t) => __cursor = Some(t),
                         None => break,
                     }
                 }
-                serde_json::Value::Array(__pages)
+                if __streaming {
+                    // Already printed inside the loop; tell
+                    // `print_output` there's nothing left to emit.
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::Array(__pages)
+                }
             } else {
                 let __out = gen::execute(&mut __svc, __op_template).await
                     .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
