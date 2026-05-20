@@ -184,6 +184,36 @@
         }
       }
     },
+    "/pets/paginated": {
+      "get": {
+        "operationId": "listPaginatedPets",
+        "summary": "Bug #21: cursor-paginated list. `x-pagination` declares the `nextPageToken` query-param ↔ `/nextPageToken` response-body cursor convention so the clap CLI emits `--pages N` / `--all-pages` flags. The tower client codegen is untouched.",
+        "tags": ["pets"],
+        "x-pagination": {
+          "queryParam": "nextPageToken",
+          "tokenPath": "/nextPageToken"
+        },
+        "parameters": [
+          {
+            "name": "nextPageToken",
+            "in": "query",
+            "required": false,
+            "description": "Opaque cursor returned by the previous page; omit on the first call.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of pets plus an optional next-page cursor (null = last page).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PetsPage" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/nullability-demo": {
       "get": {
         "operationId": "getPetNullabilityDemo",
@@ -293,6 +323,15 @@
         "properties": {
           "code": { "type": "integer", "format": "int32" },
           "message": { "type": "string" }
+        }
+      },
+      "PetsPage": {
+        "type": "object",
+        "description": "Bug #21 fixture: one page of pets plus the next-page cursor.",
+        "required": ["pets"],
+        "properties": {
+          "pets":          { "$ref": "#/components/schemas/Pets" },
+          "nextPageToken": { "type": "string", "nullable": true }
         }
       },
       "NullabilityShowcase": {

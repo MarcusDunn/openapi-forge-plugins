@@ -182,6 +182,15 @@ pub fn all(ir: &Ir, cfg: &Config) -> Outcome {
         }
     };
 
+    // One-shot pre-pass: validate each op's `x-pagination` extension
+    // and accumulate warnings in the thread-local sink. Codegen call
+    // sites (`collect_fields`, `render_op_match_arm`) use the silent
+    // `op_pagination` resolver from here on, so misconfigurations
+    // surface exactly once rather than once per call site.
+    for op in &ir.operations {
+        validate_op_pagination(ir, op);
+    }
+
     let bin_name = bin_name(ir, cfg);
     let pkg_name = format!("{bin_name}-cli");
     let oauth = detect_oauth(ir, cfg);
@@ -231,10 +240,14 @@ pub fn all(ir: &Ir, cfg: &Config) -> Outcome {
         ));
     }
 
-    Outcome::Generated(GenerationOutput {
-        files,
-        diagnostics: tower.diagnostics,
-    })
+    // Drain any clap-side warnings the validators pushed into the
+    // sink (codegen-rust-tower already drained its own before
+    // returning, so the sink starts empty on our side). Concat onto
+    // the tower diagnostics — order doesn't matter; consumers group
+    // by code.
+    let mut diagnostics = tower.diagnostics;
+    diagnostics.extend(codegen_rust_serde::diagnostics::drain());
+    Outcome::Generated(GenerationOutput { files, diagnostics })
 }
 
 fn bin_name(ir: &Ir, cfg: &Config) -> String {
@@ -404,6 +417,178 @@ fn op_uses_placeholder(op: &Operation, placeholder: &str) -> bool {
     op.path_params
         .iter()
         .any(|p| snake_case(&p.name) == snake_case(placeholder))
+}
+
+// ---------------------------------------------------------------------------
+// `x-pagination` extension
+// ---------------------------------------------------------------------------
+
+/// Per-op pagination contract, resolved from the `x-pagination`
+/// extension. Drives the `--pages N` / `--all-pages` flag emission on
+/// the CLI subcommand and the loop-vs-single-call branch in the
+/// dispatch arm.
+///
+/// Spec example:
+/// ```yaml
+/// x-pagination:
+///   queryParam: nextPageToken     # name of the cursor query param
+///   tokenPath: /nextPageToken     # JSON Pointer (RFC 6901) into the 2xx body
+/// ```
+struct PaginationConfig {
+    /// The cursor query param's snake-cased Rust identifier — used
+    /// to mutate `__op.#cursor_field_ident = Some(token)` between
+    /// iterations.
+    cursor_field_ident: proc_macro2::Ident,
+    /// JSON Pointer (RFC 6901) string, e.g. `"/nextPageToken"` or
+    /// `"/pagination/cursor"`. Resolved at runtime against the
+    /// `serde_json::Value` view of each page's success body.
+    token_pointer: String,
+}
+
+/// Silent resolver: returns the `PaginationConfig` if the op has a
+/// well-formed `x-pagination` extension pointing at a real
+/// string-typed query param, otherwise `None`. **Never emits
+/// diagnostics** — call [`validate_op_pagination`] once per op (from
+/// the pre-pass in [`all`]) to surface the malformed-extension
+/// warnings. Splitting the two prevents duplicate emission, since
+/// codegen calls this from both `collect_fields` and
+/// `render_op_match_arm`.
+fn op_pagination(spec: &Ir, op: &Operation) -> Option<PaginationConfig> {
+    resolve_pagination(spec, op).ok()
+}
+
+/// Diagnostic-emitting validator. Called exactly once per op from
+/// [`all`]'s pre-pass. The five `rust-clap/W-PAGINATION-*` codes each
+/// describe a distinct misconfiguration so the spec author knows what
+/// to fix; ops without an `x-pagination` extension are silently
+/// skipped (the absence isn't an error).
+fn validate_op_pagination(spec: &Ir, op: &Operation) {
+    if let Err(Some(d)) = resolve_pagination(spec, op) {
+        codegen_rust_serde::diagnostics::report(d);
+    }
+}
+
+/// Core resolution logic. `Err(None)` means "no `x-pagination`
+/// extension at all" (silent path); `Err(Some(d))` carries the
+/// warning describing why the extension was rejected. Keeping the
+/// validation logic in one place ensures the silent and validator
+/// paths never drift.
+fn resolve_pagination(
+    spec: &Ir,
+    op: &Operation,
+) -> Result<PaginationConfig, Option<forge_plugin_sdk::ir::Diagnostic>> {
+    use forge_plugin_sdk::diag;
+
+    let (_, vref) = op
+        .extensions
+        .iter()
+        .find(|(k, _)| k == "x-pagination")
+        .ok_or(None)?;
+    let json = values_ext::resolve_to_serde(&spec.values, *vref);
+    let obj = json.as_object().ok_or_else(|| {
+        Some(diag::warning(
+            "rust-clap/W-PAGINATION-SHAPE",
+            format!(
+                "operation `{}`: `x-pagination` must be an object \
+                 (got {}); skipping pagination emission",
+                op.id,
+                json_kind(&json)
+            ),
+        ))
+    })?;
+    let query_param = obj
+        .get("queryParam")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let token_path = obj
+        .get("tokenPath")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let (query_param, token_pointer) = match (query_param, token_path) {
+        (Some(q), Some(t)) => (q, t),
+        _ => {
+            return Err(Some(diag::warning(
+                "rust-clap/W-PAGINATION-INCOMPLETE",
+                format!(
+                    "operation `{}`: `x-pagination` requires string fields \
+                     `queryParam` and `tokenPath`; skipping",
+                    op.id
+                ),
+            )));
+        }
+    };
+    // Shallow JSON-Pointer check: enforce only the leading `/` (RFC 6901
+    // root-relative). We do *not* validate inner escape syntax (`~0`,
+    // `~1`) or reject empty segments — `serde_json::Value::pointer`
+    // tolerates oddly-formed inputs by returning `None`, which the
+    // runtime loop interprets as "last page". So a typo in the pointer
+    // shows up as an op that returns its first page and stops, not a
+    // loud error. Deep validation is a follow-up if that bites.
+    if !token_pointer.starts_with('/') {
+        return Err(Some(diag::warning(
+            "rust-clap/W-PAGINATION-POINTER",
+            format!(
+                "operation `{}`: `tokenPath` must start with `/` (RFC 6901 \
+                 root-relative JSON Pointer, e.g. `/nextPageToken`); got \
+                 `{token_pointer}`; skipping",
+                op.id
+            ),
+        )));
+    }
+    let Some(matched_param) = op.query_params.iter().find(|p| p.name == query_param) else {
+        return Err(Some(diag::warning(
+            "rust-clap/W-PAGINATION-NO-PARAM",
+            format!(
+                "operation `{}`: `x-pagination.queryParam = \"{query_param}\"` \
+                 doesn't match any of the op's query parameters; skipping",
+                op.id
+            ),
+        )));
+    };
+    if !is_string_shaped(spec, &matched_param.r#type) {
+        return Err(Some(diag::warning(
+            "rust-clap/W-PAGINATION-PARAM-TYPE",
+            format!(
+                "operation `{}`: pagination cursor `{query_param}` must be a \
+                 string- or string-enum-typed query param (the next-page \
+                 token sets it on each iteration); skipping",
+                op.id
+            ),
+        )));
+    }
+    Ok(PaginationConfig {
+        cursor_field_ident: ident(&snake_case(&matched_param.name)),
+        token_pointer,
+    })
+}
+
+fn json_kind(v: &forge_plugin_sdk::serde_json::Value) -> &'static str {
+    use forge_plugin_sdk::serde_json::Value;
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// True for `string`-typed primitives and for *named string enums*
+/// (e.g. `type: string` + `enum: [foo, bar]`). Both deserialize from
+/// a JSON string on the wire, so either is a valid cursor type.
+/// Excludes integer enums and unions of any kind.
+fn is_string_shaped(spec: &Ir, type_ref: &str) -> bool {
+    spec.types.iter().any(|t| {
+        t.id == type_ref
+            && matches!(
+                t.definition,
+                TypeDef::Primitive(forge_plugin_sdk::ir::PrimitiveType {
+                    kind: forge_plugin_sdk::ir::PrimitiveKind::String,
+                    ..
+                }) | TypeDef::EnumString(_)
+            )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1261,23 +1446,102 @@ fn render_op_match_arm(
         }
     }
 
-    let build_op = quote! {
-        let __op = #op_struct {
-            #(#field_inits,)*
-        };
-    };
-
     let execute_and_decode = render_execute_and_decode(op, &output_path);
-    let call = quote! {
-        #build_op
-        let mut __svc = runtime::ApiService {
-            inner: __http_client.clone(),
-            base_url: __base_url.clone(),
-            bearer: __bearer.clone(),
-        };
-        let __out = gen::execute(&mut __svc, __op).await
-            .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
-        #execute_and_decode
+
+    // If the op declares an `x-pagination` extension, the build path
+    // forks at runtime on the new flags: with `--pages N` or
+    // `--all-pages`, we loop, extract the next-page token from each
+    // 2xx body via the configured JSON Pointer, and emit a JSON array
+    // of page bodies. Without either flag the dispatch is byte-for-
+    // byte identical to the non-paginated path — single-call, raw
+    // body on stdout.
+    let pagination = op_pagination(spec, op);
+    let call = if let Some(pg) = pagination {
+        let cursor_field = &pg.cursor_field_ident;
+        let token_pointer = &pg.token_pointer;
+        // `__op_template.clone()` depends on `codegen-rust-tower`'s
+        // per-op request struct deriving `Clone` — it does today
+        // (`#[derive(Debug, Clone)]` on every emitted struct). If
+        // that ever changes, paginated ops will fail to compile and
+        // this branch needs reworking (e.g. recompute `field_inits`
+        // per iteration, with care for `body.expect(...)` which
+        // moves the CLI body string).
+        quote! {
+            let __op_template = #op_struct {
+                #(#field_inits,)*
+            };
+            let mut __svc = runtime::ApiService {
+                inner: __http_client.clone(),
+                base_url: __base_url.clone(),
+                bearer: __bearer.clone(),
+            };
+            if all_pages || pages.is_some() {
+                // `pages.expect(...)` is safe under the `is_some()`
+                // guard above; `pages.unwrap_or(1)` would silently
+                // fall through to the no-op case for callers who
+                // somehow reached this branch with `pages = None &&
+                // !all_pages`, which can't happen by construction.
+                let __cap: u32 = if all_pages {
+                    u32::MAX
+                } else {
+                    pages.expect("`pages` is Some when the paginate branch is entered without `--all-pages`")
+                };
+                let mut __pages: Vec<serde_json::Value> = Vec::new();
+                let mut __cursor: Option<String> = None;
+                for __i in 0..__cap {
+                    let mut __op = __op_template.clone();
+                    if __i > 0 {
+                        __op.#cursor_field = __cursor.clone();
+                    }
+                    let __out = gen::execute(&mut __svc, __op).await
+                        .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+                    let __body_value: serde_json::Value = #execute_and_decode;
+                    // `serde_json::Value::pointer` returns `None` for
+                    // missing keys *and* for syntactically-broken
+                    // pointers. We collapse both into the "last page"
+                    // terminator alongside `Some(Null)`. The CLI
+                    // can't distinguish missing-field from
+                    // explicit-null from typo'd pointer — fine for
+                    // most paginated APIs, worth a comment so
+                    // future-you doesn't go looking for the
+                    // distinction.
+                    let __next_str = match __body_value.pointer(#token_pointer) {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(serde_json::Value::String(s)) => Some(s.clone()),
+                        Some(other) => {
+                            return Err(anyhow::anyhow!(
+                                "x-pagination: cursor at `{}` was not a string: {}",
+                                #token_pointer, other
+                            ));
+                        }
+                    };
+                    __pages.push(__body_value);
+                    match __next_str {
+                        Some(t) => __cursor = Some(t),
+                        None => break,
+                    }
+                }
+                serde_json::Value::Array(__pages)
+            } else {
+                let __out = gen::execute(&mut __svc, __op_template).await
+                    .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+                #execute_and_decode
+            }
+        }
+    } else {
+        quote! {
+            let __op = #op_struct {
+                #(#field_inits,)*
+            };
+            let mut __svc = runtime::ApiService {
+                inner: __http_client.clone(),
+                base_url: __base_url.clone(),
+                bearer: __bearer.clone(),
+            };
+            let __out = gen::execute(&mut __svc, __op).await
+                .map_err(|e| anyhow::anyhow!("api call failed: {e}"))?;
+            #execute_and_decode
+        }
     };
 
     let (pre_let, bearer_let) = if needs_exchange {
@@ -1394,6 +1658,13 @@ fn render_op_match_arm(
 /// success variants); everything else turns into an `anyhow` error
 /// that surfaces as a non-zero exit code with the body printed to
 /// stderr.
+///
+/// **Contract:** the returned expression always evaluates to
+/// `serde_json::Value` (success variants via `to_value(&inner)?`,
+/// unit variants as `Value::Null`, error variants via `return Err`).
+/// The paginated dispatch arm relies on this — it annotates `let
+/// __body_value: serde_json::Value = #execute_and_decode;` and then
+/// calls `.pointer(...)` to extract the cursor.
 fn render_execute_and_decode(op: &Operation, output_path: &TokenStream) -> TokenStream {
     // No declared responses → the tower codegen emits a single
     // `Success` unit variant matched on any 2xx.
@@ -1600,7 +1871,48 @@ fn collect_fields(spec: &Ir, op: &Operation, exclude_path_param: Option<&str>) -
     if op_has_response_content(op) {
         out.push(field_for_response_schema());
     }
+    // Pagination flags are emitted only on ops with a well-formed
+    // `x-pagination` extension — keeps non-paginated subcommands clean
+    // and ensures `--all-pages` is unambiguous when present.
+    if op_pagination(spec, op).is_some() {
+        out.push(field_pages());
+        out.push(field_all_pages());
+    }
     out
+}
+
+fn field_pages() -> Field {
+    Field {
+        ident: format_ident!("pages"),
+        ty: quote!(Option<u32>),
+        doc: Some(
+            "Walk up to N pages and emit each as one element of a JSON array on stdout. \
+             Omit for single-page (raw body) output; use `--all-pages` for unlimited."
+                .into(),
+        ),
+        // `value_parser!(u32).range(1..)` makes clap reject `--pages 0`
+        // at parse time with its standard "value not in range" error,
+        // rather than letting it through to a no-op loop that silently
+        // emits `[]`. Upper bound left open — caps come from the
+        // server, not us.
+        arg_attr: Some(quote!(
+            long = "pages",
+            value_parser = clap::value_parser!(u32).range(1..)
+        )),
+    }
+}
+
+fn field_all_pages() -> Field {
+    Field {
+        ident: format_ident!("all_pages"),
+        ty: quote!(bool),
+        doc: Some(
+            "Walk every page until the next-page token is missing or null. Overrides `--pages`. \
+             First error stops with non-zero exit; pages already emitted remain on stdout."
+                .into(),
+        ),
+        arg_attr: Some(quote!(long = "all-pages")),
+    }
 }
 
 /// Schema-flag fields that suppress clap's required-arg gate on this
