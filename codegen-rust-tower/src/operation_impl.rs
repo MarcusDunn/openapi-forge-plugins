@@ -29,19 +29,7 @@ pub fn render(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
 
     let request_struct = render_request_struct(spec, op, &struct_name);
     let output_enum = render_output_enum(spec, op, &output_name);
-    // JSON-shaped ops (every response with content is JSON, no
-    // declared body or all declared bodies are JSON family) go
-    // through the sealed `JsonOperation` trait so the single blanket
-    // `impl<O: JsonOperation> Operation for O` in runtime.rs owns the
-    // sole `async fn parse_response` opaque-future in the crate.
-    // Streaming / binary-body ops keep their own direct
-    // `impl Operation` because the body collection step has to live
-    // inside the async fn.
-    let op_impl = if op_is_json_only(op) {
-        render_json_operation_impl(spec, op, &struct_name, &output_name)
-    } else {
-        render_operation_impl(spec, op, &struct_name, &output_name)
-    };
+    let op_impl = render_operation_impl(spec, op, &struct_name, &output_name);
 
     quote! {
         #![allow(non_snake_case, non_camel_case_types, clippy::all, clippy::pedantic, clippy::nursery, unused_imports, unused_mut, dead_code)]
@@ -53,23 +41,6 @@ pub fn render(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
         #output_enum
         #op_impl
     }
-}
-
-/// True when every declared response is either content-free (unit
-/// variant) or JSON-shaped. Drives the `JsonOperation` vs
-/// `Operation` split. Ops with zero declared responses are
-/// JSON-shaped by default (the synthesized `Success` variant has no
-/// body, so `parse_status` doesn't decode anything).
-///
-/// Conservative on purpose: any response with declared non-JSON
-/// content disqualifies the op from the JSON fast-path, including
-/// error responses (`text/plain` 4xx, etc). False positives (emit
-/// `JsonOperation` for a streaming op) would silently buffer
-/// multi-megabyte bodies into memory.
-fn op_is_json_only(op: &ir::Operation) -> bool {
-    op.responses
-        .iter()
-        .all(|r| r.content.is_empty() || pick_json_response_body(r).is_some())
 }
 
 fn render_request_struct(spec: &ir::Ir, op: &ir::Operation, name: &Ident) -> TokenStream {
@@ -185,42 +156,6 @@ fn render_operation_impl(
     }
 }
 
-/// JSON-shaped op: emit `impl JsonOperation` + the private sealed
-/// marker impl so the trait's `__json_operation_sealed::Sealed`
-/// supertrait is satisfied. The blanket `impl<O: JsonOperation>
-/// Operation for O` in runtime.rs then provides the `Operation` view
-/// — callers still match on `Self::Output` via `gen::execute(...)`.
-fn render_json_operation_impl(
-    spec: &ir::Ir,
-    op: &ir::Operation,
-    struct_name: &Ident,
-    output_name: &Ident,
-) -> TokenStream {
-    let method = format_ident!("{}", op.method.as_str());
-    let path_template = &op.path_template;
-    let op_id = op.original_id.as_deref().unwrap_or(&op.id);
-
-    let into_request = render_into_http_request(spec, op);
-    let parse_status = render_parse_status(spec, op, output_name);
-
-    quote! {
-        impl runtime::__json_operation_sealed::Sealed for #struct_name {}
-
-        impl runtime::JsonOperation for #struct_name {
-            type RequestBody = http_body_util::Full<bytes::Bytes>;
-            type Output = #output_name;
-
-            const METHOD: http::Method = http::Method::#method;
-            const PATH_TEMPLATE: &'static str = #path_template;
-            const OPERATION_ID: &'static str = #op_id;
-
-            #into_request
-
-            #parse_status
-        }
-    }
-}
-
 fn render_into_http_request(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
     let mut field_idents: Vec<Ident> = Vec::new();
     for p in op
@@ -245,13 +180,8 @@ fn render_into_http_request(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
     let header_block = render_header_block(op);
     let body_stmt = render_body_stmt(op);
 
-    // Return type spelled `runtime::RuntimeError` (rather than
-    // `Self::Error`) so this fn body works inside *both* a
-    // `JsonOperation` impl (no `Self::Error` associated type) and an
-    // `Operation` impl (`Self::Error = runtime::RuntimeError` via the
-    // blanket / direct impl). Same concrete error, two trait views.
     quote! {
-        fn into_http_request(self) -> Result<http::Request<Self::RequestBody>, runtime::RuntimeError> {
+        fn into_http_request(self) -> Result<http::Request<Self::RequestBody>, Self::Error> {
             #destructure
 
             #path_stmt
@@ -360,9 +290,7 @@ fn render_header_block(op: &ir::Operation) -> TokenStream {
 
 fn render_body_stmt(op: &ir::Operation) -> TokenStream {
     // `?` lets `From<serde_json::Error> for runtime::RuntimeError`
-    // do the lifting — same operator works in both the JsonOperation
-    // and Operation paths without needing `Self::Error::Decode`,
-    // which doesn't exist on JsonOperation.
+    // do the lifting via `Self::Error = runtime::RuntimeError`.
     match &op.request_body {
         Some(body)
             if body
@@ -396,18 +324,7 @@ fn render_body_stmt(op: &ir::Operation) -> TokenStream {
     }
 }
 
-/// Render the inner `match parts.status.as_u16() { … }` block. Same
-/// arms regardless of whether the wrapping fn is sync
-/// (`JsonOperation::parse_status`) or async
-/// (`Operation::parse_response` for streaming ops). Variants with a
-/// JSON body decode from `bytes`; unit variants drop the body; the
-/// catch-all returns `RuntimeError::UndeclaredStatus`.
-///
-/// Qualified path (`runtime::RuntimeError::*`) instead of
-/// `Self::Error::*` so this fragment works in both the
-/// `JsonOperation` impl (which has no `Self::Error` associated type)
-/// and the `Operation` impl.
-fn render_response_match(op: &ir::Operation, output_name: &Ident) -> TokenStream {
+fn render_parse_response(spec: &ir::Ir, op: &ir::Operation, output_name: &Ident) -> TokenStream {
     // Rust matches arms top-to-bottom and `400..=499` shadows a later `400 =>`.
     // Partition so explicit codes come first, then range arms, then `default`
     // falls into the catch-all arm.
@@ -457,36 +374,13 @@ fn render_response_match(op: &ir::Operation, output_name: &Ident) -> TokenStream
             }
         }
         None => quote! {
-            status => Err(runtime::RuntimeError::UndeclaredStatus {
+            status => Err(Self::Error::UndeclaredStatus {
                 status,
                 body: String::from_utf8_lossy(&bytes).into_owned(),
             }),
         },
     };
-    quote! {
-        match parts.status.as_u16() {
-            #arms
-            #catch_all
-        }
-    }
-}
-
-fn render_parse_status(spec: &ir::Ir, op: &ir::Operation, output_name: &Ident) -> TokenStream {
     let _ = spec;
-    let match_block = render_response_match(op, output_name);
-    quote! {
-        fn parse_status(
-            parts: http::response::Parts,
-            bytes: bytes::Bytes,
-        ) -> Result<Self::Output, runtime::RuntimeError> {
-            #match_block
-        }
-    }
-}
-
-fn render_parse_response(spec: &ir::Ir, op: &ir::Operation, output_name: &Ident) -> TokenStream {
-    let _ = spec;
-    let match_block = render_response_match(op, output_name);
     quote! {
         async fn parse_response<B>(
             resp: http::Response<B>,
@@ -499,8 +393,11 @@ fn render_parse_response(spec: &ir::Ir, op: &ir::Operation, output_name: &Ident)
             let (parts, body) = resp.into_parts();
             let bytes = runtime::collect_bytes(body)
                 .await
-                .map_err(|e| runtime::RuntimeError::Body(e.into()))?;
-            #match_block
+                .map_err(|e| Self::Error::Body(e.into()))?;
+            match parts.status.as_u16() {
+                #arms
+                #catch_all
+            }
         }
     }
 }

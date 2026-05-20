@@ -8,14 +8,7 @@
 
 use std::future::Future;
 
-/// Lower-level operation trait. One async method (`parse_response`)
-/// owns body collection + decode. Used directly by streaming /
-/// binary-body ops; JSON ops go through [`JsonOperation`] and pick
-/// this up via the blanket impl below.
-///
-/// Most callers should only see this through [`execute`]; they
-/// shouldn't need to think about `JsonOperation` vs `Operation`
-/// themselves.
+/// One operation in the API. Implemented per-operation alongside this module.
 pub trait Operation: Sized {
     type RequestBody: http_body::Body;
     type Output;
@@ -45,80 +38,9 @@ pub trait Operation: Sized {
         B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>;
 }
 
-/// JSON-shaped operation: every response with content is JSON. This
-/// is the common case and dominates compile cost when ~300 ops each
-/// have their own `async fn parse_response<B>` (each one a fresh
-/// opaque `Future` type the compiler has to size, Send-check, and
-/// monomorphize). Splitting body collection out into the single
-/// blanket [`Operation`] impl below collapses N opaque futures into
-/// one.
-///
-/// [`parse_status`](Self::parse_status) is **sync** — it gets the
-/// already-collected `Bytes` plus the response `Parts` (so headers
-/// stay reachable for future extensions). All the async lives in
-/// the blanket impl.
-///
-/// Sealed via [`__json_operation_sealed::Sealed`] so the blanket
-/// `impl<O: JsonOperation> Operation` stays coherent: external
-/// crates can't write a `JsonOperation` impl that would race with
-/// their own direct `Operation` impl on the same type.
-pub trait JsonOperation: __json_operation_sealed::Sealed + Sized {
-    type RequestBody: http_body::Body;
-    type Output;
-
-    const METHOD: http::Method;
-    const PATH_TEMPLATE: &'static str;
-    const OPERATION_ID: &'static str;
-
-    fn into_http_request(self) -> Result<http::Request<Self::RequestBody>, RuntimeError>;
-
-    /// Decode an already-collected response body. Sync — the
-    /// blanket [`Operation`] impl owns the `async fn` opaque future.
-    /// Receives `Parts` (not just `u16`) so future ops can pull
-    /// response headers without another trait widening.
-    fn parse_status(
-        parts: http::response::Parts,
-        bytes: bytes::Bytes,
-    ) -> Result<Self::Output, RuntimeError>;
-}
-
-#[doc(hidden)]
-pub(crate) mod __json_operation_sealed {
-    pub trait Sealed {}
-}
-
-/// Blanket: every `JsonOperation` is an `Operation`. This impl owns
-/// the only `async fn parse_response` in the generated client — N
-/// per-op opaque futures collapse to one.
-impl<O: JsonOperation> Operation for O {
-    type RequestBody = <O as JsonOperation>::RequestBody;
-    type Output = <O as JsonOperation>::Output;
-    type Error = RuntimeError;
-
-    const METHOD: http::Method = <O as JsonOperation>::METHOD;
-    const PATH_TEMPLATE: &'static str = <O as JsonOperation>::PATH_TEMPLATE;
-    const OPERATION_ID: &'static str = <O as JsonOperation>::OPERATION_ID;
-
-    fn into_http_request(self) -> Result<http::Request<Self::RequestBody>, Self::Error> {
-        <Self as JsonOperation>::into_http_request(self)
-    }
-
-    async fn parse_response<B>(resp: http::Response<B>) -> Result<Self::Output, Self::Error>
-    where
-        B: http_body::Body + Send + 'static,
-        B::Data: Send,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
-    {
-        let (parts, body) = resp.into_parts();
-        let bytes = collect_bytes(body)
-            .await
-            .map_err(|e| RuntimeError::Body(e.into()))?;
-        <Self as JsonOperation>::parse_status(parts, bytes)
-    }
-}
-
-/// Canonical operation error. Every generated op (JSON or streaming)
-/// uses this as its `Operation::Error` — no per-op `*Error` enums.
+/// Canonical operation error. Every generated op uses this as its
+/// `Operation::Error` — one type to match on instead of N
+/// structurally-identical per-op enums.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error("undeclared status {status}: {body}")]
@@ -170,8 +92,7 @@ where
 }
 
 /// Collect a streaming `http_body::Body` into `bytes::Bytes`. Helper used by
-/// the blanket [`Operation`] impl's body collection, and by any
-/// streaming-op `parse_response` that wants the same shape.
+/// every per-operation `parse_response` implementation.
 pub async fn collect_bytes<B>(body: B) -> Result<bytes::Bytes, B::Error>
 where
     B: http_body::Body,
