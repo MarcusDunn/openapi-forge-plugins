@@ -102,20 +102,48 @@ pub fn parse_body_arg(s: &str) -> Result<Value> {
     serde_json::from_str(s).context("parsing inline JSON")
 }
 
-#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputMode {
+    /// Pretty-printed JSON. Single value per response.
     Json,
+    /// Single-line JSON. Single value per response.
     Compact,
+    /// Newline-delimited JSON. For paginated dispatch arms this is the
+    /// streaming mode: each page body prints to stdout as soon as it
+    /// arrives, instead of buffering the whole walk into a JSON array.
+    /// For single-page (non-paginated) ops this is identical to
+    /// `Compact` — one JSON value followed by a newline.
+    Ndjson,
 }
 
 pub fn print_output(v: &Value, mode: OutputMode) -> Result<()> {
     if v.is_null() {
         return Ok(());
     }
-    let s = match mode {
-        OutputMode::Json => serde_json::to_string_pretty(v)?,
-        OutputMode::Compact => serde_json::to_string(v)?,
-    };
-    println!("{s}");
+    match mode {
+        OutputMode::Json => {
+            println!("{}", serde_json::to_string_pretty(v)?);
+        }
+        OutputMode::Compact => {
+            println!("{}", serde_json::to_string(v)?);
+        }
+        OutputMode::Ndjson => {
+            // If the dispatch arm already streamed inside the loop, it
+            // returned `Value::Null` and we exited above. Reaching here
+            // with non-Null in `Ndjson` mode means either (a) a
+            // non-paginated single-page op (emit one line, equivalent
+            // to compact), or (b) a paginated arm fell back to the
+            // accumulating path because pagination was disabled at run
+            // time — flatten an array if so.
+            match v {
+                Value::Array(items) => {
+                    for item in items {
+                        println!("{}", serde_json::to_string(item)?);
+                    }
+                }
+                _ => println!("{}", serde_json::to_string(v)?),
+            }
+        }
+    }
     Ok(())
 }
