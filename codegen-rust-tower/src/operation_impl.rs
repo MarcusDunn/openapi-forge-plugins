@@ -26,12 +26,10 @@ fn models_path() -> ModelsPath {
 pub fn render(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
     let struct_name = format_ident!("{}", naming::pascal_case(&op.id));
     let output_name = format_ident!("{}Output", naming::pascal_case(&op.id));
-    let error_name = format_ident!("{}Error", naming::pascal_case(&op.id));
 
     let request_struct = render_request_struct(spec, op, &struct_name);
     let output_enum = render_output_enum(spec, op, &output_name);
-    let error_enum = render_error_enum(&error_name);
-    let op_impl = render_operation_impl(spec, op, &struct_name, &output_name, &error_name);
+    let op_impl = render_operation_impl(spec, op, &struct_name, &output_name);
 
     quote! {
         #![allow(non_snake_case, non_camel_case_types, clippy::all, clippy::pedantic, clippy::nursery, unused_imports, unused_mut, dead_code)]
@@ -41,7 +39,6 @@ pub fn render(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
 
         #request_struct
         #output_enum
-        #error_enum
         #op_impl
     }
 }
@@ -129,28 +126,11 @@ fn render_output_enum(spec: &ir::Ir, op: &ir::Operation, name: &Ident) -> TokenS
     }
 }
 
-fn render_error_enum(name: &Ident) -> TokenStream {
-    quote! {
-        #[derive(Debug, thiserror::Error)]
-        pub enum #name {
-            #[error("undeclared status {status}: {body}")]
-            UndeclaredStatus { status: u16, body: String },
-            #[error("json decode error: {0}")]
-            Decode(#[from] serde_json::Error),
-            #[error("response body collection failed: {0}")]
-            Body(Box<dyn std::error::Error + Send + Sync + 'static>),
-            #[error("http builder error: {0}")]
-            HttpBuild(#[from] http::Error),
-        }
-    }
-}
-
 fn render_operation_impl(
     spec: &ir::Ir,
     op: &ir::Operation,
     struct_name: &Ident,
     output_name: &Ident,
-    error_name: &Ident,
 ) -> TokenStream {
     let method = format_ident!("{}", op.method.as_str());
     let path_template = &op.path_template;
@@ -163,7 +143,7 @@ fn render_operation_impl(
         impl runtime::Operation for #struct_name {
             type RequestBody = http_body_util::Full<bytes::Bytes>;
             type Output = #output_name;
-            type Error = #error_name;
+            type Error = runtime::RuntimeError;
 
             const METHOD: http::Method = http::Method::#method;
             const PATH_TEMPLATE: &'static str = #path_template;
@@ -309,6 +289,8 @@ fn render_header_block(op: &ir::Operation) -> TokenStream {
 }
 
 fn render_body_stmt(op: &ir::Operation) -> TokenStream {
+    // `?` lets `From<serde_json::Error> for runtime::RuntimeError`
+    // do the lifting via `Self::Error = runtime::RuntimeError`.
     match &op.request_body {
         Some(body)
             if body
@@ -319,14 +301,14 @@ fn render_body_stmt(op: &ir::Operation) -> TokenStream {
             if body.required {
                 quote! {
                     builder = builder.header(http::header::CONTENT_TYPE, "application/json");
-                    let bytes = serde_json::to_vec(&body).map_err(Self::Error::Decode)?;
+                    let bytes = serde_json::to_vec(&body)?;
                     let request_body = http_body_util::Full::new(bytes::Bytes::from(bytes));
                 }
             } else {
                 quote! {
                     builder = builder.header(http::header::CONTENT_TYPE, "application/json");
                     let bytes = match body {
-                        Some(b) => serde_json::to_vec(&b).map_err(Self::Error::Decode)?,
+                        Some(b) => serde_json::to_vec(&b)?,
                         None => Vec::new(),
                     };
                     let request_body = http_body_util::Full::new(bytes::Bytes::from(bytes));

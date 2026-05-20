@@ -184,6 +184,39 @@
         }
       }
     },
+    "/pets/{petId}/photo": {
+      "get": {
+        "operationId": "downloadPetPhoto",
+        "summary": "Bug #19: binary-body response. The 2xx variant declares `image/png` (non-JSON), so the generator must emit `impl Operation` directly — *not* the JSON-only `JsonOperation` path — otherwise the blanket impl would still buffer-and-then-attempt-decode behavior in future work; today the streaming path leaves the body as a unit variant and doesn't try to decode.",
+        "tags": ["pets"],
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Raw PNG bytes",
+            "content": {
+              "image/png": {
+                "schema": { "type": "string", "format": "binary" }
+              }
+            }
+          },
+          "404": {
+            "description": "Pet not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/{petId}/problem": {
       "get": {
         "operationId": "getPetProblem",

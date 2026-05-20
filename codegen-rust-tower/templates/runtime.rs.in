@@ -38,6 +38,21 @@ pub trait Operation: Sized {
         B::Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>;
 }
 
+/// Canonical operation error. Every generated op uses this as its
+/// `Operation::Error` — one type to match on instead of N
+/// structurally-identical per-op enums.
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeError {
+    #[error("undeclared status {status}: {body}")]
+    UndeclaredStatus { status: u16, body: String },
+    #[error("json decode error: {0}")]
+    Decode(#[from] serde_json::Error),
+    #[error("response body collection failed: {0}")]
+    Body(Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error("http builder error: {0}")]
+    HttpBuild(#[from] http::Error),
+}
+
 /// Error returned by [`execute`]. Either the underlying `tower::Service`
 /// failed, or the operation's `parse_response` did.
 #[derive(Debug, thiserror::Error)]
