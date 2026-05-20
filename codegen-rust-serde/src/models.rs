@@ -91,9 +91,14 @@ fn render_union(spec: &ir::Ir, name: &Ident, docs: &TokenStream, u: &ir::UnionTy
             variants.extend(quote! { #variant_ident(#inner), });
         }
     }
+    // No `PartialEq` derive: variants are arbitrary user-named types
+    // (structs / arrays / maps) and the struct emission deliberately
+    // doesn't derive `PartialEq` because we can't guarantee every
+    // property's type supports it. Consumers that need `==` should
+    // derive it themselves on the inner types (or on the union).
     quote! {
         #docs
-        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        #[derive(Debug, Clone, Serialize, Deserialize)]
         #[serde(untagged)]
         pub enum #name {
             #variants
@@ -221,6 +226,7 @@ fn render_string_enum(name: &Ident, docs: &TokenStream, e: &ir::EnumStringType) 
     // `inProgress` round-trip through `pascal_case` to `InProgress`, which
     // would *not* match `inProgress` by default).
     let mut variants = TokenStream::new();
+    let mut display_arms = TokenStream::new();
     for value in &e.values {
         let variant_docs = doc_attrs(&value.documentation);
         let variant = format_ident!("{}", naming::pascal_case(&value.value));
@@ -230,12 +236,24 @@ fn render_string_enum(name: &Ident, docs: &TokenStream, e: &ir::EnumStringType) 
             #[serde(rename = #wire)]
             #variant,
         });
+        display_arms.extend(quote! { Self::#variant => f.write_str(#wire), });
     }
     quote! {
         #docs
         #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         pub enum #name {
             #variants
+        }
+
+        // `Display` mirrors the serde wire value so the tower client's
+        // `param.to_string()` query-param serialization round-trips
+        // through the same representation `serde_json` would emit.
+        impl std::fmt::Display for #name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    #display_arms
+                }
+            }
         }
     }
 }
@@ -279,6 +297,16 @@ fn render_int_enum(name: &Ident, docs: &TokenStream, e: &ir::EnumIntType) -> Tok
                     #from_arms
                     other => Err(format!(#err_msg, other)),
                 }
+            }
+        }
+
+        // `Display` formats the discriminant integer. Same shape as the
+        // serde wire form, so `param.to_string()` query-param
+        // serialization matches what `serde_json` would emit.
+        impl std::fmt::Display for #name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let v: i64 = self.clone().into();
+                std::fmt::Display::fmt(&v, f)
             }
         }
     }
