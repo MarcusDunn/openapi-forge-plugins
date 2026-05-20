@@ -184,6 +184,23 @@
         }
       }
     },
+    "/pets/nullability-demo": {
+      "get": {
+        "operationId": "getPetNullabilityDemo",
+        "summary": "Bug #20: return a model that exercises every (required × nullable) cross-product so the optional+nullable case round-trips missing / explicit-null / value as distinct states.",
+        "tags": ["pets"],
+        "responses": {
+          "200": {
+            "description": "Showcase of every field-nullability shape",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/NullabilityShowcase" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/{petId}/photo": {
       "get": {
         "operationId": "downloadPetPhoto",
@@ -276,6 +293,17 @@
         "properties": {
           "code": { "type": "integer", "format": "int32" },
           "message": { "type": "string" }
+        }
+      },
+      "NullabilityShowcase": {
+        "type": "object",
+        "description": "Bug #20: every (required × nullable) cross-product. The optional+nullable field (`tristate`) needs `Option<Option<T>>` to keep missing distinguishable from explicit `null` on the wire.",
+        "required": ["always_present", "nullable_required"],
+        "properties": {
+          "always_present":    { "type": "string" },
+          "missing_allowed":   { "type": "string" },
+          "nullable_required": { "type": "string", "nullable": true },
+          "tristate":          { "type": "string", "nullable": true }
         }
       }
     }
