@@ -9,8 +9,8 @@
 use compile_test::gen;
 use compile_test::gen::models::{Error, Pet, PetMood, PetStatus, Pets};
 use compile_test::gen::operations::{
-    FindPetsByTag, FindPetsByTagOutput, GetPetProblem, GetPetProblemOutput, ListPets, ListPetsOutput,
-    ReplacePet, ReplacePetOutput,
+    DownloadPetPhoto, DownloadPetPhotoOutput, FindPetsByTag, FindPetsByTagOutput, GetPetProblem,
+    GetPetProblemOutput, ListPets, ListPetsOutput, ReplacePet, ReplacePetOutput,
 };
 use compile_test::gen::Operation;
 use http_body_util::{BodyExt, Full};
@@ -244,6 +244,44 @@ async fn list_pets_default_response_for_unexpected_status() {
     };
     assert_eq!(err.code, 500);
     assert_eq!(err.message, "boom");
+}
+
+/// Bug #19: a binary-body 2xx response (`image/png`) must skip the
+/// `JsonOperation` path the rest of the petstore takes — otherwise the
+/// generated `parse_status` would attempt to `serde_json::from_slice`
+/// the bytes and reject anything that isn't valid JSON. The body of
+/// this test is non-JSON bytes; if the streaming-op heuristic misfires
+/// and emits `JsonOperation`, this test fails at decode time.
+///
+/// This also exercises the compile-time invariant: `DownloadPetPhoto`
+/// implements `Operation` *without* `JsonOperation`, so the blanket
+/// impl in `runtime.rs` doesn't apply and the body stays out of
+/// JSON-decode paths.
+#[tokio::test]
+async fn streaming_op_skips_json_decode() {
+    let png_signature = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let body = png_signature.to_vec();
+    let mut svc = tower::service_fn(move |_req: http::Request<ReqBody>| {
+        let body = body.clone();
+        async move {
+            Ok::<_, Infallible>(
+                http::Response::builder()
+                    .status(200)
+                    .header(http::header::CONTENT_TYPE, "image/png")
+                    .body(Full::new(bytes::Bytes::from(body)))
+                    .unwrap(),
+            )
+        }
+    });
+    let op = DownloadPetPhoto {
+        pet_id: "42".into(),
+    };
+    let out = gen::execute(&mut svc, op).await.expect(
+        "non-JSON 200 body must not be JSON-decoded; if this errored with a serde \
+         decode failure the streaming-op heuristic regressed and the op took the \
+         JsonOperation path",
+    );
+    assert!(matches!(out, DownloadPetPhotoOutput::Ok));
 }
 
 #[allow(dead_code)]

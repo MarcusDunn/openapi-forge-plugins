@@ -90,6 +90,8 @@ fn operations_mod(spec: &ir::Ir) -> TokenStream {
             quote! { pub mod #snake; }
         })
         .collect();
+    // Per-op `*Error` enums went away (replaced by `runtime::RuntimeError`),
+    // so only re-export the request struct and the `Output` enum here.
     let reexports: Vec<TokenStream> = spec
         .operations
         .iter()
@@ -97,8 +99,7 @@ fn operations_mod(spec: &ir::Ir) -> TokenStream {
             let snake = format_ident!("{}", naming::snake_case(&op.id));
             let struct_name = format_ident!("{}", naming::pascal_case(&op.id));
             let output_name = format_ident!("{}Output", naming::pascal_case(&op.id));
-            let error_name = format_ident!("{}Error", naming::pascal_case(&op.id));
-            quote! { pub use self::#snake::{#struct_name, #output_name, #error_name}; }
+            quote! { pub use self::#snake::{#struct_name, #output_name}; }
         })
         .collect();
     quote! {
