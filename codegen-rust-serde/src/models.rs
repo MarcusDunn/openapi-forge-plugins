@@ -4,6 +4,7 @@
 //! aliases, top-level arrays, and modelable unions land as `pub type`.
 
 use forge_plugin_sdk::ir;
+use forge_plugin_sdk::peel_nullable;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
@@ -28,6 +29,28 @@ pub fn render(spec: &ir::Ir) -> TokenStream {
         #![allow(non_snake_case, non_camel_case_types, clippy::all, clippy::pedantic, clippy::nursery, dead_code)]
 
         use serde::{Deserialize, Serialize};
+
+        /// Serde `deserialize_with` for tri-state nullable fields
+        /// (`Option<Option<T>>`). Without it, `null` on the wire would
+        /// collapse to the outer `None` (because `Option<Option<T>>`'s
+        /// default Deserialize treats `null` as the OUTER `None`), and
+        /// generators would lose the missing-vs-explicit-null
+        /// distinction the spec carries.
+        ///
+        /// With this helper: missing → outer `None` (via
+        /// `#[serde(default)]`); `null` → `Some(None)`; value →
+        /// `Some(Some(value))`. Inserted on every emitted models.rs
+        /// even when no field uses it — `#![allow(dead_code)]` at the
+        /// crate root suppresses the warning.
+        fn deserialize_explicit_optional<'de, D, T>(
+            deserializer: D,
+        ) -> std::result::Result<Option<Option<T>>, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+            T: serde::Deserialize<'de>,
+        {
+            Option::<T>::deserialize(deserializer).map(Some)
+        }
 
         #items
     }
@@ -174,13 +197,41 @@ fn render_struct(
         let rust_name = naming::snake_case(&prop.name);
         let field_ident = types::ident(&rust_name);
         let rename_needed = strip_raw(&rust_name) != prop.name;
+        // The IR canonicalises `T | null` as a two-variant union (see
+        // SDK's `peel_nullable`). `type_ref_to_rust` already collapses
+        // that to `Option<T>` at the use site. We need the *wire-level*
+        // flag too, to decide between the three optional-field shapes:
+        //   missing-or-value     → `Option<T>` + skip-if-none + default
+        //   present-but-nullable → `Option<T>` (no skip, no default)
+        //   tri-state            → `Option<Option<T>>` + skip + custom
+        //                          `deserialize_with` so the outer
+        //                          `None` survives a `null` on the wire
+        //                          (without the custom path, `null`
+        //                          deserialises as the outer `None`,
+        //                          collapsing missing and explicit-null
+        //                          back together).
+        let nullable = peel_nullable(&spec.types, &prop.r#type).is_some();
         let inner_ty = type_ref_to_rust(spec, &prop.r#type, &models_path_inside());
-        let (final_ty, needs_skip) = if prop.required {
-            (inner_ty, false)
-        } else if types::is_option(&inner_ty) {
-            (inner_ty, true)
-        } else {
-            (quote! { Option<#inner_ty> }, true)
+        let (final_ty, serde_attr) = match (prop.required, nullable) {
+            // Required, not nullable: field must be present, value of T.
+            (true, false) => (inner_ty, TokenStream::new()),
+            // Required, nullable: must be present; `null` → `None`, value
+            // → `Some(value)`. `inner_ty` is already `Option<T>`.
+            (true, true) => (inner_ty, TokenStream::new()),
+            // Optional, not nullable: missing ≡ `None`; serde
+            // round-trips both ways.
+            (false, false) => (
+                quote! { Option<#inner_ty> },
+                quote! { #[serde(default, skip_serializing_if = "Option::is_none")] },
+            ),
+            // Optional, nullable (tri-state): outer `None` = missing,
+            // `Some(None)` = explicit `null`, `Some(Some(v))` = value.
+            // `inner_ty` is already `Option<T>`, so outer-wrap yields
+            // `Option<Option<T>>`.
+            (false, true) => (
+                quote! { Option<#inner_ty> },
+                quote! { #[serde(default, deserialize_with = "deserialize_explicit_optional", skip_serializing_if = "Option::is_none")] },
+            ),
         };
         let rename_attr = if rename_needed {
             let wire = &prop.name;
@@ -188,15 +239,10 @@ fn render_struct(
         } else {
             TokenStream::new()
         };
-        let skip_attr = if needs_skip {
-            quote! { #[serde(default, skip_serializing_if = "Option::is_none")] }
-        } else {
-            TokenStream::new()
-        };
         fields.extend(quote! {
             #prop_docs
             #rename_attr
-            #skip_attr
+            #serde_attr
             pub #field_ident: #final_ty,
         });
     }

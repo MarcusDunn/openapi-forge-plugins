@@ -7,7 +7,7 @@
 //! `into_http_request` and `parse_response`.
 
 use compile_test::gen;
-use compile_test::gen::models::{Error, Pet, PetMood, PetStatus, Pets};
+use compile_test::gen::models::{Error, NullabilityShowcase, Pet, PetMood, PetStatus, Pets};
 use compile_test::gen::operations::{
     DownloadPetPhoto, DownloadPetPhotoOutput, FindPetsByTag, FindPetsByTagOutput, GetPetProblem,
     GetPetProblemOutput, ListPets, ListPetsOutput, ReplacePet, ReplacePetOutput,
@@ -282,6 +282,102 @@ async fn streaming_op_skips_json_decode() {
          JsonOperation path",
     );
     assert!(matches!(out, DownloadPetPhotoOutput::Ok));
+}
+
+/// Bug #20: `nullable: true` on an *optional* property must preserve the
+/// missing-vs-explicit-null distinction. The generator emits
+/// `Option<Option<T>>` for that case, gated by a `deserialize_with`
+/// helper, so:
+///   - field missing from wire → outer `None`
+///   - field present as `null` → `Some(None)`
+///   - field present with value → `Some(Some(value))`
+///
+/// The other three (required × nullable) cross-products keep their
+/// natural shapes (`T`, `Option<T>` no-skip, `Option<T>` with skip).
+/// All four exercised below.
+#[test]
+fn nullability_field_shapes_roundtrip() {
+    // ---- deserialize: every wire form decodes to the right state ----
+
+    // All three optional+nullable variants present.
+    let v: NullabilityShowcase = serde_json::from_str(
+        r#"{"always_present":"x","missing_allowed":"y","nullable_required":"z","tristate":"q"}"#,
+    )
+    .unwrap();
+    assert_eq!(v.always_present, "x");
+    assert_eq!(v.missing_allowed.as_deref(), Some("y"));
+    assert_eq!(v.nullable_required.as_deref(), Some("z"));
+    assert!(matches!(v.tristate, Some(Some(ref s)) if s == "q"));
+
+    // Optional fields missing; required nullable is null; tristate
+    // explicit-null (distinct from missing!).
+    let v: NullabilityShowcase = serde_json::from_str(
+        r#"{"always_present":"x","nullable_required":null,"tristate":null}"#,
+    )
+    .unwrap();
+    assert_eq!(v.missing_allowed, None);
+    assert_eq!(v.nullable_required, None);
+    assert!(
+        matches!(v.tristate, Some(None)),
+        "explicit `null` must decode as Some(None), not the missing-case None; got {:?}",
+        v.tristate
+    );
+
+    // tristate missing entirely (vs explicit null above).
+    let v: NullabilityShowcase = serde_json::from_str(
+        r#"{"always_present":"x","nullable_required":null}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        v.tristate, None,
+        "missing tristate must decode as the outer None"
+    );
+
+    // Required field missing → decode error.
+    serde_json::from_str::<NullabilityShowcase>(
+        r#"{"missing_allowed":"y","nullable_required":null}"#,
+    )
+    .expect_err("`always_present` is required; missing it must fail decode");
+
+    // ---- serialize: each Rust state writes the right wire shape ----
+
+    // missing_allowed=None → field omitted;
+    // nullable_required=Some("z") → "z";
+    // tristate=Some(None) → null.
+    let v = NullabilityShowcase {
+        always_present: "x".into(),
+        missing_allowed: None,
+        nullable_required: Some("z".into()),
+        tristate: Some(None),
+    };
+    let s = serde_json::to_string(&v).unwrap();
+    assert!(s.contains(r#""always_present":"x""#), "{s}");
+    assert!(
+        !s.contains("missing_allowed"),
+        "optional+non-nullable None must be omitted: {s}"
+    );
+    assert!(s.contains(r#""nullable_required":"z""#), "{s}");
+    assert!(
+        s.contains(r#""tristate":null"#),
+        "tristate=Some(None) must serialize as explicit null: {s}"
+    );
+
+    // tristate=None → field omitted; nullable_required=None → null.
+    let v = NullabilityShowcase {
+        always_present: "x".into(),
+        missing_allowed: None,
+        nullable_required: None,
+        tristate: None,
+    };
+    let s = serde_json::to_string(&v).unwrap();
+    assert!(
+        !s.contains("tristate"),
+        "tristate=None must be omitted (missing on the wire): {s}"
+    );
+    assert!(
+        s.contains(r#""nullable_required":null"#),
+        "required+nullable None must serialize as explicit null: {s}"
+    );
 }
 
 #[allow(dead_code)]
