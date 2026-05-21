@@ -66,12 +66,8 @@ pub async fn audience_access_token(
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         bail!(
-            "token exchange {status}: {body}\n\
-             (audience={audience}; if the IdP requires client authentication, \
-             set the `{}` env var to the client secret OR add `client_secret` \
-             to the `[profiles.{}]` block of `<config_dir>/config.toml`)",
-            CLIENT_SECRET_ENV,
-            profile,
+            "{}",
+            format_token_exchange_failure(status.as_u16(), &body, audience, profile)
         );
     }
     let tr: TokenResponse = resp.json().await.context("parsing exchange response")?;
@@ -87,4 +83,76 @@ pub async fn audience_access_token(
     let bearer = stored.access_token.clone();
     cache().await.lock().await.insert(cache_key, stored);
     Ok(Some(bearer))
+}
+
+/// Build the human-facing error message for a non-2xx response from the
+/// IdP's token endpoint. The hint we append varies by cause:
+///
+///  - `invalid_client` with an audience-related `error_description`
+///    (the typical *"Audience not found"* / *"audience invalid"* case
+///    triggered by a typo in the tenant placeholder) → point at the
+///    audience template, not at client authentication.
+///  - `invalid_client` with anything else → keep the client-secret hint
+///    (env var or `[profiles.<profile>]` config) since that genuinely
+///    is the next thing to check.
+///  - any other RFC 6749 error code (`invalid_grant`,
+///    `invalid_request`, …) → no automatic hint; the server's own
+///    `error` / `error_description` is enough and adding a client-auth
+///    suggestion would be actively misleading (#23).
+///  - body doesn't parse as JSON → fall back to the previous behaviour
+///    of appending the client-secret hint, since we don't know what
+///    failed and the hint is at worst a no-op.
+fn format_token_exchange_failure(status: u16, body: &str, audience: &str, profile: &str) -> String {
+    let header = format!("token exchange {status}: {body}");
+    let client_secret_hint = format!(
+        "(audience={audience}; if the IdP requires client authentication, \
+         set the `{CLIENT_SECRET_ENV}` env var to the client secret OR \
+         add `client_secret` to the `[profiles.{profile}]` block of \
+         `<config_dir>/config.toml`)"
+    );
+    let audience_hint = format!(
+        "(audience={audience}; the IdP rejected the audience — check the \
+         `--tenant` value and the `audience-template` configured for this \
+         profile)"
+    );
+
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(body) else {
+        // Non-JSON body — server may be misbehaving or we hit a proxy.
+        // Preserve the previous behaviour: surface the client-secret hint
+        // since we have no signal otherwise.
+        return format!("{header}\n{client_secret_hint}");
+    };
+    let error_code = parsed.get("error").and_then(|v| v.as_str());
+    let error_desc = parsed
+        .get("error_description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match error_code {
+        Some("invalid_client") => {
+            // Audience-shaped error_description: "Audience not found",
+            // "Invalid audience for client", etc. Case-insensitive
+            // substring is good enough — IdPs phrase this differently
+            // (Keycloak, Auth0, Okta) but all mention "audience".
+            if error_desc.to_ascii_lowercase().contains("audience") {
+                format!("{header}\n{audience_hint}")
+            } else {
+                format!("{header}\n{client_secret_hint}")
+            }
+        }
+        Some(_) => {
+            // `invalid_grant`, `invalid_request`, `invalid_scope`,
+            // server-defined codes, etc. The server's own
+            // error_description is the authoritative diagnostic; adding
+            // a client-auth hint would route the user away from the
+            // real problem.
+            header
+        }
+        None => {
+            // JSON without an `error` field — unusual for a 4xx from a
+            // compliant IdP, but possible (custom error envelopes).
+            // Same reasoning as the non-JSON path.
+            format!("{header}\n{client_secret_hint}")
+        }
+    }
 }

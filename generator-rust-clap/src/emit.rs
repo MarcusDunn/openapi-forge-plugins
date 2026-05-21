@@ -2522,6 +2522,107 @@ mod tests {
         }
     }
 
+    /// Issue #23: the token-exchange failure path used to *unconditionally*
+    /// append a "set CLIENT_SECRET / add `client_secret` to your profile"
+    /// hint. That hint is misleading for non-auth errors (e.g.
+    /// `invalid_client` with `error_description: "Audience not found"`
+    /// caused by a bad `--tenant` value). Pin the new shape: parse the
+    /// body's RFC 6749 `error` field and branch.
+    #[test]
+    fn exchange_tail_defines_error_formatter_helper() {
+        // The shared formatter must be defined as a free function so the
+        // logic is exercised at one site (the `!resp.status().is_success()`
+        // branch) rather than duplicated inline. Locking the name down
+        // also lets future tests / consumers reference it deliberately.
+        assert!(
+            AUTH_RS_EXCHANGE_TAIL.contains("fn format_token_exchange_failure("),
+            "exchange tail must define `format_token_exchange_failure` helper:\n\
+             ---\n{AUTH_RS_EXCHANGE_TAIL}\n---"
+        );
+        // The helper must attempt to parse the body as an RFC 6749 error
+        // object (`{ "error": "...", "error_description": "..." }`) and
+        // surface the `error` code into the branching logic.
+        assert!(
+            AUTH_RS_EXCHANGE_TAIL.contains("serde_json::from_str")
+                || AUTH_RS_EXCHANGE_TAIL.contains("serde_json::from_slice"),
+            "helper must best-effort parse the response body as JSON \
+             (RFC 6749 error object) before deciding which hint to append"
+        );
+        assert!(
+            AUTH_RS_EXCHANGE_TAIL.contains("invalid_client"),
+            "helper must branch on the RFC 6749 `invalid_client` error code"
+        );
+    }
+
+    /// Catch syntax errors in the exchange-tail template before they
+    /// surface as a `forge generate` failure on a downstream fixture.
+    /// `syn::parse_str` doesn't resolve identifiers (it doesn't care
+    /// that `CLIENT_SECRET_ENV` is defined in the prologue, not here),
+    /// it just verifies the token stream is well-formed Rust.
+    #[test]
+    fn exchange_tail_parses_as_rust() {
+        let result = syn::parse_str::<syn::File>(AUTH_RS_EXCHANGE_TAIL);
+        assert!(
+            result.is_ok(),
+            "exchange tail template failed to parse as Rust: {:?}",
+            result.err()
+        );
+    }
+
+    /// The unconditional client-secret hint (env var + `[profiles.<x>]`
+    /// blob) must no longer fire for every non-2xx response. It is now
+    /// gated behind the `invalid_client` branch of the helper.
+    #[test]
+    fn exchange_tail_does_not_unconditionally_emit_client_secret_hint() {
+        // Pre-fix the bail!() string literal carried this exact phrase
+        // alongside the status/body interpolation. Post-fix the same
+        // phrase still appears (it's the *content* of the gated hint —
+        // we don't want to lose the diagnostic when it is appropriate)
+        // but only inside `format_token_exchange_failure`, never in the
+        // unconditional bail!() at the call site.
+        //
+        // Locate the failure branch (`if !resp.status().is_success()`)
+        // and assert its body does not contain the inline hint literal.
+        let needle = "if !resp.status().is_success()";
+        let start = AUTH_RS_EXCHANGE_TAIL
+            .find(needle)
+            .expect("expected `if !resp.status().is_success()` guard in exchange tail");
+        // Walk to the matching `}` at depth 0.
+        let body_start = AUTH_RS_EXCHANGE_TAIL[start..]
+            .find('{')
+            .map(|i| start + i)
+            .expect("guard has a body");
+        let mut depth = 0usize;
+        let mut end = body_start;
+        for (i, ch) in AUTH_RS_EXCHANGE_TAIL[body_start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = body_start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let branch = &AUTH_RS_EXCHANGE_TAIL[start..end];
+        assert!(
+            !branch.contains("if the IdP requires client authentication"),
+            "the unconditional client-secret hint must not appear in the \
+             failure branch — gate it behind `format_token_exchange_failure` \
+             so it only fires for the actual `invalid_client` case (#23):\n\
+             ---\n{branch}\n---"
+        );
+        // The call site itself must dispatch through the helper.
+        assert!(
+            branch.contains("format_token_exchange_failure"),
+            "failure branch must dispatch through `format_token_exchange_failure`:\n\
+             ---\n{branch}\n---"
+        );
+    }
+
     #[test]
     fn configure_variant_exposes_non_interactive_flags() {
         // Empty tag tree is enough to drive emit_root_enum into the oauth branch.
