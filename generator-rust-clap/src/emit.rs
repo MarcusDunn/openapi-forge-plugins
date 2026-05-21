@@ -930,13 +930,42 @@ fn emit_main_rs(
             quote!(Cmd::#set_v { .. } | Cmd::#unset_v | Cmd::#show_v => unreachable!("handled above"),),
         );
     }
+    // Each `render_op_match_arm` call appends one `async fn handle_<op>`
+    // to `handlers`. Emitted as siblings of `main` so rustc can
+    // borrow-check each one in parallel; the corresponding match arm
+    // shrinks to a single `.await?` dispatch.
+    let mut handlers: Vec<TokenStream> = Vec::new();
     if ir.operations.is_empty() && !oauth_active {
         match_arms.push(quote!(Cmd::Noop => return Ok(()),));
     } else {
         for root in &tree.roots {
-            match_arms.push(emit_root_match_arms(ir, root, "", oauth, exchange));
+            match_arms.push(emit_root_match_arms(
+                ir,
+                root,
+                "",
+                oauth,
+                exchange,
+                &mut handlers,
+            ));
         }
     }
+
+    // `match cli.cmd { ... }` partially moves `cli`, so the dispatch
+    // arms can't capture `&cli`. Hoist the cli-derived bits the
+    // per-op handlers need into pre-match locals and pass them
+    // individually — `OutputMode` is `Copy`, the strings get cheap
+    // `Option<String>` / `String` clones at each dispatch site (only
+    // one fires per invocation, so amortized to a single clone).
+    let profile_let = if oauth_active {
+        quote!(let __profile: String = cli.profile.clone();)
+    } else {
+        quote!()
+    };
+    let pre_match_ctx = quote! {
+        let __token: Option<String> = cli.token.clone();
+        let __output: runtime::OutputMode = cli.output;
+        #profile_let
+    };
 
     let tokio_main = quote! {
         #[tokio::main(flavor = "multi_thread")]
@@ -949,6 +978,7 @@ fn emit_main_rs(
             #placeholder_handlers
             #placeholder_resolve
             #client_init
+            #pre_match_ctx
             let result: serde_json::Value = match cli.cmd {
                 #(#match_arms)*
             };
@@ -1013,6 +1043,8 @@ fn emit_main_rs(
         #cmd_enum
 
         #group_types
+
+        #(#handlers)*
 
         #tokio_main
     })
@@ -1206,17 +1238,21 @@ fn emit_root_match_arms(
     prefix: &str,
     oauth: Option<&OauthInfo>,
     exchange: Option<&TokenExchangeInfo>,
+    handlers: &mut Vec<TokenStream>,
 ) -> TokenStream {
     if root.is_misc() {
-        let arms = root
+        let arms: Vec<TokenStream> = root
             .direct_ops
             .iter()
-            .map(|op| render_op_match_arm(spec, op, &format_ident!("Cmd"), oauth, exchange));
+            .map(|op| {
+                render_op_match_arm(spec, op, &format_ident!("Cmd"), oauth, exchange, handlers)
+            })
+            .collect();
         return quote!(#(#arms)*);
     }
     let variant = format_ident!("{}", pascal_case(&root.name));
     let q = qualified_pascal(prefix, &root.name);
-    let inner = emit_group_match_arms(spec, root, &q, oauth, exchange);
+    let inner = emit_group_match_arms(spec, root, &q, oauth, exchange, handlers);
     quote! {
         Cmd::#variant(__g) => match __g.cmd {
             #inner
@@ -1230,6 +1266,7 @@ fn emit_group_match_arms(
     q: &str,
     oauth: Option<&OauthInfo>,
     exchange: Option<&TokenExchangeInfo>,
+    handlers: &mut Vec<TokenStream>,
 ) -> TokenStream {
     let cmd_ty = format_ident!("{}Cmd", q);
     let child_arms: Vec<TokenStream> = group
@@ -1238,7 +1275,7 @@ fn emit_group_match_arms(
         .map(|child| {
             let child_variant = format_ident!("{}", pascal_case(&child.name));
             let child_q = qualified_pascal(q, &child.name);
-            let inner = emit_group_match_arms(spec, child, &child_q, oauth, exchange);
+            let inner = emit_group_match_arms(spec, child, &child_q, oauth, exchange, handlers);
             quote! {
                 #cmd_ty::#child_variant(__g) => match __g.cmd {
                     #inner
@@ -1249,7 +1286,7 @@ fn emit_group_match_arms(
     let op_arms: Vec<TokenStream> = group
         .direct_ops
         .iter()
-        .map(|op| render_op_match_arm(spec, op, &cmd_ty, oauth, exchange))
+        .map(|op| render_op_match_arm(spec, op, &cmd_ty, oauth, exchange, handlers))
         .collect();
     quote! {
         #(#child_arms)*
@@ -1276,12 +1313,26 @@ fn render_op_variant(
     }
 }
 
+/// Emit one operation's dispatch.
+///
+/// Pushes a free-standing `async fn handle_<op_id>(...) ->
+/// anyhow::Result<serde_json::Value>` containing the request-build,
+/// `gen::execute(...).await`, response-decode, and pagination logic
+/// into `handlers`; returns just the `Cmd::<Variant>{…} =>
+/// handle_<op_id>(…).await?,` arm. Without this split every op's body
+/// lives inside a single `async fn main`, and rustc's MIR borrow check
+/// (which doesn't parallelize *within* a function body) becomes the
+/// dominant cost on medium-to-large specs — see issue #19 for the
+/// rustc `-Zself-profile` numbers (588 s of borrow-check, 14 GB peak
+/// RSS on N≈464 ops). The semantics are unchanged; only the emit shape
+/// moves.
 fn render_op_match_arm(
     spec: &Ir,
     op: &Operation,
     cmd_ty: &proc_macro2::Ident,
     oauth: Option<&OauthInfo>,
     exchange: Option<&TokenExchangeInfo>,
+    handlers: &mut Vec<TokenStream>,
 ) -> TokenStream {
     let variant = format_ident!("{}", pascal_case(&op.id));
     let op_struct = quote! { gen::operations::#variant };
@@ -1492,7 +1543,7 @@ fn render_op_match_arm(
                 // walks where buffering hundreds of pages is wasteful.
                 // For `json` / `compact` we keep collecting into one
                 // array, which `print_output` then formats at the end.
-                let __streaming = cli.output == runtime::OutputMode::Ndjson;
+                let __streaming = __output == runtime::OutputMode::Ndjson;
                 let mut __pages: Vec<serde_json::Value> = Vec::new();
                 let mut __cursor: Option<String> = None;
                 for __i in 0..__cap {
@@ -1599,13 +1650,13 @@ fn render_op_match_arm(
                     .ok_or_else(|| anyhow::anyhow!(#err_msg))?;
             },
             quote! {
-                let __bearer: Option<String> = if let Some(t) = cli.token.clone() {
+                let __bearer: Option<String> = if let Some(t) = __token.clone() {
                     Some(t)
                 } else {
                     let __aud = format!(#aud_fmt, __slug);
                     let __res: Option<String> = #res_expr;
                     let __scope: Option<&str> = #scope_expr;
-                    auth::audience_access_token(&cli.profile, &__aud, __res.as_deref(), __scope).await?
+                    auth::audience_access_token(&__profile, &__aud, __res.as_deref(), __scope).await?
                 };
             },
         )
@@ -1613,17 +1664,17 @@ fn render_op_match_arm(
         (
             quote!(),
             quote! {
-                let __bearer: Option<String> = if let Some(t) = cli.token.clone() {
+                let __bearer: Option<String> = if let Some(t) = __token.clone() {
                     Some(t)
                 } else {
-                    auth::access_token(&cli.profile).await?
+                    auth::access_token(&__profile).await?
                 };
             },
         )
     } else {
         (
             quote!(),
-            quote!(let __bearer: Option<String> = cli.token.clone();),
+            quote!(let __bearer: Option<String> = __token.clone();),
         )
     };
 
@@ -1669,9 +1720,83 @@ fn render_op_match_arm(
         },
     };
 
+    // Per-op handler emitted at file scope. Mirrors the destructured
+    // fields one-for-one as fn params (in declaration order), then
+    // appends a shared trailer (token, output mode, profile when OAuth
+    // is active, base URL, HTTP client, resolved placeholder slug for
+    // RFC 8693 exchange ops).
+    //
+    // Passing the cli-derived bits *individually* matters: the outer
+    // `match cli.cmd { Cmd::<Group>(__g) => match __g.cmd { ... } }`
+    // partially moves `cli`, so a `&cli` parameter would fail to borrow
+    // after the partial move. Taking owned `__token` / `__profile` /
+    // `__output` clones (built once before the match) keeps the
+    // dispatch arms borrow-checker-clean. The URL and client are taken
+    // by value too so the handler body keeps its existing
+    // `__base_url.clone()` / `__http_client.clone()` shape unchanged;
+    // the per-CLI-invocation cost is one extra String/HttpClient clone
+    // that only happens on the single matched arm.
+    let handler_ident = format_ident!("handle_{}", snake_case(&op.id));
+    let handler_field_params: Vec<TokenStream> = destruct_fields
+        .iter()
+        .map(|f| {
+            let ident = &f.ident;
+            let ty = &f.ty;
+            quote!(#ident: #ty,)
+        })
+        .collect();
+    let profile_param = if oauth.is_some() {
+        quote!(__profile: String,)
+    } else {
+        quote!()
+    };
+    let resolved_param = if needs_exchange {
+        let ex = exchange.expect("`needs_exchange` ⇒ exchange is Some");
+        let ph_snake = format_ident!("__resolved_{}", snake_case(&ex.placeholder));
+        quote!(, #ph_snake: Option<String>)
+    } else {
+        quote!()
+    };
+    let profile_arg = if oauth.is_some() {
+        quote!(__profile.clone(),)
+    } else {
+        quote!()
+    };
+    let resolved_arg = if needs_exchange {
+        let ex = exchange.expect("`needs_exchange` ⇒ exchange is Some");
+        let ph_snake = format_ident!("__resolved_{}", snake_case(&ex.placeholder));
+        quote!(, #ph_snake.clone())
+    } else {
+        quote!()
+    };
+    handlers.push(quote! {
+        async fn #handler_ident(
+            #(#handler_field_params)*
+            __token: Option<String>,
+            __output: runtime::OutputMode,
+            #profile_param
+            __base_url: String,
+            __http_client: runtime::HttpClient
+            #resolved_param
+        ) -> anyhow::Result<serde_json::Value> {
+            let __result: serde_json::Value = { #arm_body };
+            Ok(__result)
+        }
+    });
+
+    let dispatch_idents: Vec<&proc_macro2::Ident> =
+        destruct_fields.iter().map(|f| &f.ident).collect();
     quote! {
         #cmd_ty::#variant #destruct => {
-            #arm_body
+            #handler_ident(
+                #(#dispatch_idents,)*
+                __token.clone(),
+                __output,
+                #profile_arg
+                __base_url.clone(),
+                __http_client.clone()
+                #resolved_arg,
+            ).await?
         },
     }
 }
