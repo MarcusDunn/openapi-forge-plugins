@@ -1,0 +1,90 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AdditionalPropertiesAny",
+    "version": "1.0.0",
+    "description": "Regression fixture for issue #20. Exercises the `additionalProperties: {}` (→ IR `AdditionalProperties::Any`) lowering path: every shape here previously emitted an empty struct with no fields, dropping the map at deserialize time. After the fix each open-map shape must round-trip as `HashMap<String, serde_json::Value>`."
+  },
+  "servers": [
+    { "url": "https://example.com" }
+  ],
+  "paths": {
+    "/function": {
+      "get": {
+        "operationId": "getFunction",
+        "summary": "Return a Function — the original repro from issue #20.",
+        "responses": {
+          "200": {
+            "description": "A function definition.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Function" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/freeform": {
+      "get": {
+        "operationId": "getFreeform",
+        "summary": "Return a top-level open map (named).",
+        "responses": {
+          "200": {
+            "description": "Free-form object.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FreeformObject" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/explicit-true": {
+      "get": {
+        "operationId": "getExplicitTrue",
+        "summary": "Return a top-level open map (named, `additionalProperties: true`).",
+        "responses": {
+          "200": {
+            "description": "Free-form object via `additionalProperties: true`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExplicitTrueObject" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Function": {
+        "type": "object",
+        "description": "Mirrors the original bug report: two required inline fields that are themselves `additionalProperties: {}` maps.",
+        "properties": {
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "internalParameters": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": ["parameters", "internalParameters"]
+      },
+      "FreeformObject": {
+        "type": "object",
+        "description": "Named open map. Should not be emitted as a struct at all — the use site should inline `HashMap<String, serde_json::Value>`.",
+        "additionalProperties": {}
+      },
+      "ExplicitTrueObject": {
+        "type": "object",
+        "description": "Same shape but uses the boolean form `additionalProperties: true`. Both lower to `AdditionalProperties::Any` in the IR.",
+        "additionalProperties": true
+      }
+    }
+  }
+}
