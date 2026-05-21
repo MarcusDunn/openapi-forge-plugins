@@ -789,7 +789,15 @@ fn emit_main_rs(
     };
     let builtin_handlers = if oauth_active {
         quote! {
-            if matches!(cli.cmd, Cmd::Login) {
+            if let Cmd::Login { reset } = &cli.cmd {
+                if *reset {
+                    // #24 suggestion #2: explicit recovery from
+                    // `state mismatch (CSRF check failed)`. Wipes the
+                    // stored token before re-running the flow — same
+                    // effect as `logout` then `login`, exposed as a
+                    // single discoverable flag in `login --help`.
+                    let _ = auth::logout(&cli.profile).await?;
+                }
                 auth::login(&cli.profile).await?;
                 eprintln!("logged in (profile: {})", cli.profile);
                 return Ok(());
@@ -980,7 +988,7 @@ fn emit_main_rs(
         vec![quote!(Cmd::Completion { .. } => unreachable!("handled above"),)];
     if oauth_active {
         match_arms.push(
-            quote!(Cmd::Login | Cmd::Logout | Cmd::Token | Cmd::Configure { .. } | Cmd::Profile(_) => unreachable!("handled above"),),
+            quote!(Cmd::Login { .. } | Cmd::Logout | Cmd::Token | Cmd::Configure { .. } | Cmd::Profile(_) => unreachable!("handled above"),),
         );
     }
     if let Some(pascal) = placeholder_pascal_ident.as_ref() {
@@ -1123,7 +1131,11 @@ fn emit_root_enum(
     let oauth_variants = if oauth_active {
         quote! {
             /// Run OAuth 2.0 authorization-code flow with PKCE; persists the access token.
-            Login,
+            Login {
+                /// Wipe any stored token for the active profile before starting the new flow. Use when a previous aborted `login` left this CLI stuck on `state mismatch (CSRF check failed)` — typically a leftover browser tab firing its callback against the new listener.
+                #[arg(long)]
+                reset: bool,
+            },
             /// Delete the stored OAuth token.
             Logout,
             /// Print the active bearer access token to stdout. Refreshes lazily on a 30s skew; falls through to a full `login` flow if nothing valid is cached. Use with the placeholder flag (when configured) to mint an audience-exchanged token for that slug instead of the base token.
@@ -2654,6 +2666,56 @@ mod tests {
         assert!(
             lower.contains("bearer") || lower.contains("access token"),
             "Token variant doc comment must mention `bearer` or `access token`:\n{out}"
+        );
+    }
+
+    /// Issue #24 suggestion #2: the existing CSRF-state hint (#29)
+    /// points users at the recovery action, but `--help` doesn't
+    /// surface it. A `login --reset` flag wipes any stored token for
+    /// the active profile *before* starting the new authorize/exchange
+    /// dance — that gives users a discoverable escape hatch and turns
+    /// the workaround into a documented one-liner.
+    #[test]
+    fn login_variant_carries_reset_flag() {
+        let tree = TagTree { roots: vec![] };
+        let ir = minimal_ir();
+        let tokens = emit_root_enum(&ir, &tree, /*oauth_active*/ true, None, None, None);
+        let out = tokens.to_string();
+        // Struct-form variant: `Login { ... reset : bool , ... }`.
+        // quote! reformats field punctuation with spaces, so check for
+        // the field identifier and its type independently.
+        assert!(
+            out.contains("Login {"),
+            "OAuth-active CLI must emit `Login` as a struct-form variant \
+             (was a unit variant pre-#24); needs a `reset` field for the \
+             explicit-reset path:\n{out}"
+        );
+        assert!(
+            out.contains("reset"),
+            "Login variant must carry a `reset` field for #24 suggestion #2:\n{out}"
+        );
+        // The reset flag must be bool — `Option<bool>` would force users
+        // to write `--reset true`, which clap doesn't ergonomically
+        // expose. Pin it explicitly.
+        assert!(
+            out.contains("reset : bool") || out.contains("reset: bool"),
+            "Login.reset must be a plain `bool` (so `--reset` is a flag, \
+             not a value-carrying option):\n{out}"
+        );
+    }
+
+    /// Inverse: without OAuth there's no login flow to reset, so the
+    /// variant must stay absent (or unit). Asserts the existing
+    /// oauth-inactive shape is untouched.
+    #[test]
+    fn login_variant_absent_without_oauth() {
+        let tree = TagTree { roots: vec![] };
+        let ir = minimal_ir();
+        let tokens = emit_root_enum(&ir, &tree, /*oauth_active*/ false, None, None, None);
+        let out = tokens.to_string();
+        assert!(
+            !out.contains("Login"),
+            "non-OAuth CLI must not emit a `Login` Cmd variant:\n{out}"
         );
     }
 }
