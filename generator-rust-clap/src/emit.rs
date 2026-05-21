@@ -2495,6 +2495,33 @@ mod tests {
         );
     }
 
+    /// Issue #24: when the OAuth callback's `state` doesn't match the
+    /// freshly-generated one, the prior bail!() bottomed out at
+    /// `"state mismatch (CSRF check failed)"` with no recovery guidance.
+    /// The most common cause is a leftover browser tab from an aborted
+    /// previous `login` firing its callback against the new listener —
+    /// surface that as a hint so users self-recover without a support
+    /// search.
+    #[test]
+    fn login_state_mismatch_includes_recovery_hint() {
+        // Pin the literal so a refactor that accidentally drops the
+        // check is visible here.
+        assert!(
+            AUTH_RS_PROLOGUE.contains("state mismatch"),
+            "login flow must still detect state mismatch (CSRF check)"
+        );
+        // The recovery hint must point at the actionable cause — a stale
+        // browser tab from a prior aborted login — not just restate the
+        // protocol-level failure.
+        for needle in ["aborted", "browser tab"] {
+            assert!(
+                AUTH_RS_PROLOGUE.contains(needle),
+                "state-mismatch error must mention `{needle}` as part of \
+                 the recovery hint (#24)"
+            );
+        }
+    }
+
     #[test]
     fn configure_variant_exposes_non_interactive_flags() {
         // Empty tag tree is enough to drive emit_root_enum into the oauth branch.

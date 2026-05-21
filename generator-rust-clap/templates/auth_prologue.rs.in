@@ -407,7 +407,21 @@ pub async fn login(profile: &str) -> Result<StoredToken> {
     let code = got_code.ok_or_else(|| anyhow!("authorization code missing from callback"))?;
     let st = got_state.ok_or_else(|| anyhow!("state missing from callback"))?;
     if st != state {
-        bail!("state mismatch (CSRF check failed)");
+        // The state on the wire was fine (non-empty, well-formed) — it
+        // just doesn't match what *this* `login` invocation generated.
+        // In practice that overwhelmingly means a stale browser tab from
+        // a previous aborted `login` fired its callback against the new
+        // listener (or the user clicked back/refresh in an old IdP tab
+        // and the IdP re-redirected with the previous `state`). Without
+        // this hint the user is stuck — the protocol-level message
+        // doesn't suggest *what to do*, and the workaround (kill stale
+        // listeners, close every auth tab, fresh shell) is non-obvious.
+        bail!(
+            "state mismatch (CSRF check failed); this typically means a \
+             leftover browser tab from a previous aborted `login` fired \
+             its callback against this listener — close any open auth \
+             browser tabs and re-run `login`"
+        );
     }
 
     let http = reqwest::Client::new();
