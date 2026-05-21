@@ -43,12 +43,31 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
     match &named.definition {
         ir::TypeDef::Object(o) => {
             // Objects with only `additionalProperties` and no named fields
-            // are maps. Inline them as `HashMap<String, T>` at the use site
-            // — emitting a one-field newtype struct forces every caller
-            // through a `.additional.get(...)` dance for no semantic gain.
+            // are either typed maps (Typed) or fully-open shapes (Any).
+            // Inline them at the use site — emitting a one-field newtype
+            // struct forces every caller through a `.additional.get(...)`
+            // dance for no semantic gain.
+            //
+            // The two cases pick different Rust shapes:
+            //  - Typed{T} → `HashMap<String, T>` (keys arbitrary, values
+            //    are a known schema).
+            //  - Any      → `serde_json::Value`. The IR has no "any JSON"
+            //    primitive, so the parser lowers a bare `{}` schema (and
+            //    `additionalProperties: true`) to `Object{props:[],
+            //    AP=Any}`. That shape carries *no* constraint that values
+            //    be objects — a string or number on the wire is just as
+            //    valid — so a `HashMap<String, Value>` would over-restrict
+            //    and reject those wires at deserialize time. `Value` is
+            //    the only Rust type that faithfully accepts everything
+            //    the IR says is permitted here.
             if let Some(value_ty) = additional_properties_only(o) {
-                let inner = type_ref_to_rust(spec, value_ty, models_path);
-                return quote! { std::collections::HashMap<String, #inner> };
+                return match value_ty {
+                    AdditionalMapValue::Typed(t) => {
+                        let inner = type_ref_to_rust(spec, t, models_path);
+                        quote! { std::collections::HashMap<String, #inner> }
+                    }
+                    AdditionalMapValue::Any => quote! { serde_json::Value },
+                };
             }
             named_type_path(models_path, &naming::rust_type_name(named))
         }
@@ -107,17 +126,34 @@ fn named_type_path(models_path: &ModelsPath, name: &str) -> TokenStream {
     }
 }
 
-/// Detect "this object has no named properties; it's just a typed map."
-/// Returns the value `TypeRef` if so. The JSON-Schema shape is
-/// `{ "type": "object", "additionalProperties": <X> }` with no
-/// `properties`; we translate that to `HashMap<String, X>` at the use site.
-pub fn additional_properties_only(o: &ir::ObjectType) -> Option<&str> {
+/// Value type of an object that's been recognized as a pure map by
+/// [`additional_properties_only`]. `Typed` resolves through the spec to a
+/// concrete Rust type at the use site; `Any` corresponds to the
+/// permissive shapes (`additionalProperties: {}` or `: true`) and
+/// becomes `serde_json::Value` without a type-table lookup.
+pub enum AdditionalMapValue<'a> {
+    Typed(&'a str),
+    Any,
+}
+
+/// Detect "this object has no named properties; it's just a map."
+/// Returns the value-type marker if so. The JSON-Schema shapes are
+/// `{ "type": "object", "additionalProperties": <X> }` (typed map) and
+/// `{ "type": "object", "additionalProperties": {} | true }` (any map),
+/// both with no `properties`. The closed-empty case
+/// (`additionalProperties: false`, i.e. `Forbidden`) is *not* a map —
+/// it stays a real empty struct so callers that want a zero-field type
+/// still get one.
+pub fn additional_properties_only(o: &ir::ObjectType) -> Option<AdditionalMapValue<'_>> {
     if !o.properties.is_empty() {
         return None;
     }
     match &o.additional_properties {
-        ir::AdditionalProperties::Typed { r#type } => Some(r#type.as_str()),
-        _ => None,
+        ir::AdditionalProperties::Typed { r#type } => {
+            Some(AdditionalMapValue::Typed(r#type.as_str()))
+        }
+        ir::AdditionalProperties::Any => Some(AdditionalMapValue::Any),
+        ir::AdditionalProperties::Forbidden => None,
     }
 }
 
