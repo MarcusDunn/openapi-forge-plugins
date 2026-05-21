@@ -93,12 +93,22 @@ jobs:
             cargo_cmd: test --no-fail-fast
           # generator-rust-clap emits a complete CLI crate (Cargo.toml +
           # src/main.rs). The generated `out/` *is* the buildable crate, so
-          # there's no separate `compile-test/` wrapper — we just `cargo
-          # build` the generated crate.
+          # the `out` row just runs `cargo build` to prove it compiles.
           - fixture: clap-petstore
             plugins: "generator-rust-clap"
             work_dir: out
             cargo_cmd: build
+          # Codegen-shape regression tests for the clap generator. Lives
+          # alongside the build row above so a single `forge generate
+          # fixtures/clap-petstore` powers both — this row asserts the
+          # *shape* (per-op handler fns, slim `main` body) while the
+          # `out` row asserts the result *compiles*. Specifically pinned
+          # against issue #19 (one giant inlined `async fn main` blew up
+          # MIR borrow-check on medium specs).
+          - fixture: clap-petstore
+            plugins: "generator-rust-clap (codegen shape)"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
