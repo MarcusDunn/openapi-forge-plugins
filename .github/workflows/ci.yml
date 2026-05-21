@@ -91,6 +91,10 @@ jobs:
             plugins: "generator-rust-tower"
             work_dir: compile-test
             cargo_cmd: test --no-fail-fast
+          - fixture: additional-properties-false
+            plugins: "generator-rust-tower"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
           # generator-rust-clap emits a complete CLI crate (Cargo.toml +
           # src/main.rs). The generated `out/` *is* the buildable crate, so
           # the `out` row just runs `cargo build` to prove it compiles.

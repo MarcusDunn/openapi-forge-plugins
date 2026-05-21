@@ -1,0 +1,54 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "AdditionalPropertiesFalse",
+    "version": "1.0.0",
+    "description": "Regression fixture for issue #26. Exercises the `additionalProperties: false` (→ IR `AdditionalProperties::Forbidden`) lowering path when no `properties` block is declared. Pre-fix `codegen-rust-serde` emitted a fieldless `pub struct ... {}` here and the generated client silently deserialized every wire payload into the empty struct — the CLI then printed `{}` regardless of what the server actually returned. After the fix every closed-empty shape must inline as `serde_json::Value` at the use site so the response body survives."
+  },
+  "servers": [
+    { "url": "https://example.com" }
+  ],
+  "paths": {
+    "/inline": {
+      "get": {
+        "operationId": "getInline",
+        "summary": "Return an inline closed-empty schema — the original repro from issue #26.",
+        "responses": {
+          "200": {
+            "description": "A response declared as `{type: object, additionalProperties: false}` inline with no properties.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": false }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/opaque": {
+      "get": {
+        "operationId": "getOpaque",
+        "summary": "Return a named closed-empty schema.",
+        "responses": {
+          "200": {
+            "description": "Named closed-empty body.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Opaque" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Opaque": {
+        "type": "object",
+        "description": "Named closed-empty schema. Should not be emitted as a struct at all — the use site should inline `serde_json::Value`.",
+        "additionalProperties": false
+      }
+    }
+  }
+}

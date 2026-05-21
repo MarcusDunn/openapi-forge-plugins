@@ -182,15 +182,10 @@ fn render_struct(
     docs: &TokenStream,
     o: &ir::ObjectType,
 ) -> TokenStream {
-    if o.properties.is_empty()
-        && matches!(o.additional_properties, ir::AdditionalProperties::Forbidden)
-    {
-        return quote! {
-            #docs
-            #[derive(Debug, Clone, Serialize, Deserialize)]
-            pub struct #name {}
-        };
-    }
+    // No special case for the fieldless `Forbidden` shape: it's already
+    // filtered upstream by `should_emit_named` (via
+    // `types::additional_properties_only`) and inlined as
+    // `serde_json::Value` at the use site. See issue #26.
     let mut fields = TokenStream::new();
     for prop in &o.properties {
         let prop_docs = doc_attrs(&prop.documentation);

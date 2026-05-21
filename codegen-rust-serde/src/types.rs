@@ -42,13 +42,12 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
     };
     match &named.definition {
         ir::TypeDef::Object(o) => {
-            // Objects with only `additionalProperties` and no named fields
-            // are either typed maps (Typed) or fully-open shapes (Any).
-            // Inline them at the use site — emitting a one-field newtype
-            // struct forces every caller through a `.additional.get(...)`
-            // dance for no semantic gain.
+            // Objects with no named fields fall into three groups; all
+            // three inline at the use site rather than minting a struct
+            // (a one-field newtype just forces every caller through a
+            // `.additional.get(...)` dance for no semantic gain, and the
+            // fieldless variants silently swallow the wire body):
             //
-            // The two cases pick different Rust shapes:
             //  - Typed{T} → `HashMap<String, T>` (keys arbitrary, values
             //    are a known schema).
             //  - Any      → `serde_json::Value`. The IR has no "any JSON"
@@ -57,16 +56,25 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             //    AP=Any}`. That shape carries *no* constraint that values
             //    be objects — a string or number on the wire is just as
             //    valid — so a `HashMap<String, Value>` would over-restrict
-            //    and reject those wires at deserialize time. `Value` is
-            //    the only Rust type that faithfully accepts everything
-            //    the IR says is permitted here.
+            //    and reject those wires at deserialize time.
+            //  - Forbidden → `serde_json::Value`. The literal reading is
+            //    "only the empty object," but in practice spec authors
+            //    reach for `additionalProperties: false` (with no
+            //    `properties` block) when they mean *"don't care, pass
+            //    it through"* and never check that the result is `{}`.
+            //    Emitting a fieldless `pub struct Foo {}` deserializes
+            //    every wire payload into nothing and silently drops the
+            //    body (issue #26); `Value` surfaces what the server
+            //    actually sent, mirroring the resolution of #20.
             if let Some(value_ty) = additional_properties_only(o) {
                 return match value_ty {
                     AdditionalMapValue::Typed(t) => {
                         let inner = type_ref_to_rust(spec, t, models_path);
                         quote! { std::collections::HashMap<String, #inner> }
                     }
-                    AdditionalMapValue::Any => quote! { serde_json::Value },
+                    AdditionalMapValue::Any | AdditionalMapValue::Forbidden => {
+                        quote! { serde_json::Value }
+                    }
                 };
             }
             named_type_path(models_path, &naming::rust_type_name(named))
@@ -126,24 +134,39 @@ fn named_type_path(models_path: &ModelsPath, name: &str) -> TokenStream {
     }
 }
 
-/// Value type of an object that's been recognized as a pure map by
-/// [`additional_properties_only`]. `Typed` resolves through the spec to a
-/// concrete Rust type at the use site; `Any` corresponds to the
-/// permissive shapes (`additionalProperties: {}` or `: true`) and
-/// becomes `serde_json::Value` without a type-table lookup.
+/// Value-shape marker for an object that has no named properties.
+/// [`additional_properties_only`] returns one of these when an object's
+/// `properties` list is empty:
+///  - `Typed(T)` — typed map; resolves through the spec to a concrete
+///    Rust type at the use site (`HashMap<String, T>`).
+///  - `Any` — `additionalProperties: {}` or `: true`; becomes
+///    `serde_json::Value` without a type-table lookup, since the IR
+///    permits any JSON value here (string, number, array, object…).
+///  - `Forbidden` — `additionalProperties: false` with no properties.
+///    Literally this means "only the empty object," but in practice
+///    spec authors use it as a passthrough; lowering to
+///    `serde_json::Value` matches that intent and avoids the
+///    silent-body-drop in issue #26.
 pub enum AdditionalMapValue<'a> {
     Typed(&'a str),
     Any,
+    Forbidden,
 }
 
-/// Detect "this object has no named properties; it's just a map."
-/// Returns the value-type marker if so. The JSON-Schema shapes are
-/// `{ "type": "object", "additionalProperties": <X> }` (typed map) and
-/// `{ "type": "object", "additionalProperties": {} | true }` (any map),
-/// both with no `properties`. The closed-empty case
-/// (`additionalProperties: false`, i.e. `Forbidden`) is *not* a map —
-/// it stays a real empty struct so callers that want a zero-field type
-/// still get one.
+/// Detect "this object has no named properties; it's a map-shaped or
+/// otherwise-empty type that should inline at the use site." Returns a
+/// shape marker if so, `None` if there are real fields to render.
+///
+/// The JSON-Schema shapes covered:
+///  - `{ "type": "object", "additionalProperties": <X> }` — typed map.
+///  - `{ "type": "object", "additionalProperties": {} | true }` — any
+///    JSON value, since the IR permits non-object wires here.
+///  - `{ "type": "object", "additionalProperties": false }` — closed
+///    empty. Spec-literally this is "only `{}`," but emitting it as a
+///    fieldless struct silently swallows whatever the server actually
+///    sends (issue #26). The pragmatic call — matching the resolution
+///    direction of #20 — is to surface the wire as `serde_json::Value`
+///    and let the caller see it.
 pub fn additional_properties_only(o: &ir::ObjectType) -> Option<AdditionalMapValue<'_>> {
     if !o.properties.is_empty() {
         return None;
@@ -153,7 +176,7 @@ pub fn additional_properties_only(o: &ir::ObjectType) -> Option<AdditionalMapVal
             Some(AdditionalMapValue::Typed(r#type.as_str()))
         }
         ir::AdditionalProperties::Any => Some(AdditionalMapValue::Any),
-        ir::AdditionalProperties::Forbidden => None,
+        ir::AdditionalProperties::Forbidden => Some(AdditionalMapValue::Forbidden),
     }
 }
 
