@@ -13,6 +13,7 @@ use minijinja::{Environment, Value as JValue};
 use serde::Serialize;
 
 use crate::config::Config;
+use crate::highlight;
 use crate::markdown;
 use crate::nav::{method_class, Nav};
 use crate::paths;
@@ -727,21 +728,36 @@ pub struct ParamView {
     pub required: bool,
     pub deprecated: bool,
     pub description_html: Option<String>,
-    pub example_json: Option<String>,
+    pub example: Option<ExampleView>,
 }
 
-fn first_example_json(
+/// One example, pre-rendered: the raw payload as a `String` plus the
+/// same payload with JSON-token spans applied. Templates emit both —
+/// the highlighted HTML inside `<pre>`, the raw string in a
+/// `data-copy-source` attribute on the copy button.
+#[derive(Serialize, Clone)]
+pub struct ExampleView {
+    pub raw: String,
+    pub html: String,
+}
+
+fn first_example(
     spec: &Ir,
     examples: &[(String, forge_plugin_sdk::ir::Example)],
-) -> Option<String> {
+) -> Option<ExampleView> {
     let (_, ex) = examples.first()?;
     if let Some(s) = &ex.serialized_value {
-        return Some(s.clone());
+        return Some(example_view(s.clone()));
     }
     if let Some(r) = ex.data_value.or(ex.value) {
-        return Some(values_ext::to_json_pretty(&spec.values, r));
+        return Some(example_view(values_ext::to_json_pretty(&spec.values, r)));
     }
     None
+}
+
+fn example_view(raw: String) -> ExampleView {
+    let html = highlight::highlight_json(&raw);
+    ExampleView { raw, html }
 }
 
 fn param_view(spec: &Ir, asset_prefix: &str, p: &Parameter, location: &'static str) -> ParamView {
@@ -754,7 +770,7 @@ fn param_view(spec: &Ir, asset_prefix: &str, p: &Parameter, location: &'static s
         required: p.required,
         deprecated: p.deprecated,
         description_html: markdown::render_opt(p.description.as_deref()),
-        example_json: first_example_json(spec, &p.examples),
+        example: first_example(spec, &p.examples),
     }
 }
 
@@ -765,7 +781,7 @@ pub struct MediaTypeView {
     pub media_type: String,
     pub r#type: TypeRefView,
     pub inline_type: Option<InlineSchemaView>,
-    pub example_json: Option<String>,
+    pub example: Option<ExampleView>,
     /// When the media type's schema is a discriminated union, the
     /// disambiguation rule is inlined here so callers see it without
     /// clicking through to the schema page.
@@ -778,7 +794,7 @@ fn body_content_view(spec: &Ir, asset_prefix: &str, c: &BodyContent) -> MediaTyp
         media_type: c.media_type.clone(),
         r#type,
         inline_type,
-        example_json: first_example_json(spec, &c.examples),
+        example: first_example(spec, &c.examples),
         discriminator: discriminator_for_typeref(spec, asset_prefix, &c.r#type),
     }
 }
@@ -1050,7 +1066,7 @@ pub struct SchemaView {
     pub union_variants: Vec<UnionVariantView>,
     pub union_kind: &'static str,
     pub discriminator: Option<DiscriminatorView>,
-    pub example_json: Option<String>,
+    pub example: Option<ExampleView>,
     pub used_in: Vec<OperationLink>,
 }
 
@@ -1158,7 +1174,7 @@ pub fn schema_view(
         union_variants: Vec::new(),
         union_kind: "",
         discriminator: None,
-        example_json: first_example_json(spec, &t.examples),
+        example: first_example(spec, &t.examples),
         used_in: used_in_links(spec, asset_prefix, used_in.ops_referencing(&t.id).collect()),
     };
     match &t.definition {

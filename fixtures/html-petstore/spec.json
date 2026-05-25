@@ -319,9 +319,7 @@
             "description": "Optional categorisation tag."
           }
         },
-        "examples": [
-          { "id": "pet_42", "name": "Whiskers", "tag": "cat" }
-        ]
+        "example": { "id": "pet_42", "name": "Whiskers", "tag": "cat" }
       },
       "Pets": {
         "type": "array",

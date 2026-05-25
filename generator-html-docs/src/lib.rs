@@ -9,6 +9,7 @@
 
 mod config;
 mod emit;
+mod highlight;
 mod markdown;
 mod nav;
 mod paths;

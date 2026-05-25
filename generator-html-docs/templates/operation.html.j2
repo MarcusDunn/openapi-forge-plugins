@@ -8,6 +8,12 @@
       <code class="path">{% for seg in op.path_segments -%}
         {% if seg.is_param %}<span class="path-param">{{ seg.text }}</span>{% else %}{{ seg.text }}{% endif %}
       {%- endfor %}</code>
+      <button
+        type="button"
+        class="copy-btn"
+        data-copy-btn
+        data-copy-endpoint="{{ op.path_template }}"
+        aria-label="Copy endpoint URL">copy</button>
     </p>
     {% if op.tag_links %}
     <p class="op-tags">
@@ -56,8 +62,8 @@
         {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
       </details>
       {% endif %}
-      {% if c.example_json %}
-        {% set example = c.example_json %}
+      {% if c.example %}
+        {% set example = c.example %}
         {% include "partials/_example.html.j2" %}
       {% endif %}
     </article>
@@ -113,8 +119,8 @@
               {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
             </details>
             {% endif %}
-            {% if c.example_json %}
-              {% set example = c.example_json %}
+            {% if c.example %}
+              {% set example = c.example %}
               {% include "partials/_example.html.j2" %}
             {% endif %}
           </article>

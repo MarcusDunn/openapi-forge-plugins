@@ -1,6 +1,14 @@
 {% if example %}
 <figure class="example">
-  <figcaption>Example</figcaption>
-  <pre><code class="language-json">{{ example }}</code></pre>
+  <figcaption>
+    Example
+    <button
+      type="button"
+      class="copy-btn"
+      data-copy-btn
+      data-copy-text="{{ example.raw }}"
+      aria-label="Copy example payload">copy</button>
+  </figcaption>
+  <pre><code class="language-json">{{ example.html|safe }}</code></pre>
 </figure>
 {% endif %}

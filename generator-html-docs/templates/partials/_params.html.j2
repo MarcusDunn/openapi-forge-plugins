@@ -14,11 +14,9 @@
       {% set inline = p.inline_type %}{% include "partials/_inline_schema.html.j2" %}
     </details>
     {% endif %}
-    {% if p.example_json %}
-    <details class="example">
-      <summary>Example</summary>
-      <pre><code class="language-json">{{ p.example_json }}</code></pre>
-    </details>
+    {% if p.example %}
+      {% set example = p.example %}
+      {% include "partials/_example.html.j2" %}
     {% endif %}
   </dd>
   {% endfor %}

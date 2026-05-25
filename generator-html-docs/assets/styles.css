@@ -514,6 +514,40 @@ ul.schemas-list .schema-title { font-weight: 600; }
 }
 .discriminator-mapping dt code { font-weight: 500; }
 
+/* ---- JSON syntax highlighting ---- */
+.tok-string   { color: #0a8043; }
+.tok-key      { color: #0969da; font-weight: 500; }
+.tok-number   { color: #6639ba; }
+.tok-keyword  { color: #cf222e; font-weight: 500; }
+.tok-punct    { color: var(--fg-muted); }
+[data-theme="dark"] .tok-string,
+@media (prefers-color-scheme: dark) {
+  [data-theme="auto"] .tok-string { color: #4ec07b; }
+  [data-theme="auto"] .tok-key    { color: #6cb6ff; }
+  [data-theme="auto"] .tok-number { color: #c297ff; }
+  [data-theme="auto"] .tok-keyword { color: #ff6e6e; }
+}
+[data-theme="dark"] .tok-key      { color: #6cb6ff; }
+[data-theme="dark"] .tok-number   { color: #c297ff; }
+[data-theme="dark"] .tok-keyword  { color: #ff6e6e; }
+
+/* ---- copy-to-clipboard button ---- */
+.copy-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+  font-size: 0.8em;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+  font-family: var(--font-sans);
+}
+.copy-btn:hover { background: var(--bg-muted); color: var(--fg); }
+.copy-btn.copied { background: var(--method-get); color: white; border-color: var(--method-get); }
+figure.example figcaption { display: flex; align-items: center; gap: 0.4rem; }
+
 /* ---- inline expanded synthetic schemas ---- */
 .inline-nested {
   margin-top: 0.25rem;

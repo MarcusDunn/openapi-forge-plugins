@@ -148,6 +148,54 @@
     });
   }
 
+  // ---- copy-to-clipboard ----
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () { fallbackCopy(text); });
+    } else {
+      fallbackCopy(text);
+    }
+  }
+
+  function fallbackCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try { document.execCommand("copy"); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  function flashCopied(btn) {
+    var original = btn.textContent;
+    btn.textContent = "copied";
+    btn.classList.add("copied");
+    setTimeout(function () {
+      btn.textContent = original;
+      btn.classList.remove("copied");
+    }, 900);
+  }
+
+  function initCopyButtons() {
+    document.addEventListener("click", function (ev) {
+      var btn = ev.target.closest("[data-copy-btn]");
+      if (!btn) return;
+      var text = btn.dataset.copyText;
+      if (!text && btn.dataset.copyEndpoint) {
+        var base = effectiveServerUrl() || "";
+        // Strip trailing `/` from base to avoid double-slash on join.
+        text = base.replace(/\/+$/, "") + btn.dataset.copyEndpoint;
+      }
+      if (!text) return;
+      copyText(text);
+      flashCopied(btn);
+    });
+  }
+
   // ---- sidebar on-path highlighting ----
 
   function initSidebarOnPath() {
@@ -192,5 +240,6 @@
     initServerPicker();
     initServerVariableForms();
     initSidebarOnPath();
+    initCopyButtons();
   });
 })();

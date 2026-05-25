@@ -89,10 +89,10 @@
   </section>
   {% endif %}
 
-  {% if schema.example_json %}
+  {% if schema.example %}
   <section aria-labelledby="example-heading">
     <h2 id="example-heading">Example</h2>
-    {% set example = schema.example_json %}
+    {% set example = schema.example %}
     {% include "partials/_example.html.j2" %}
   </section>
   {% endif %}

@@ -543,6 +543,44 @@ fn op_page_response_article_has_id_anchor() {
     );
 }
 
+// ---------- M3: JSON syntax highlighting + copy buttons ----------
+
+#[test]
+fn json_examples_are_highlighted_with_token_spans() {
+    // Pet schema has an `examples: [{ id, name, tag }]` entry. The
+    // generator pretty-prints it and wraps tokens in classed spans.
+    let html = read("schemas/Pet.html");
+    assert!(
+        html.contains("class=\"tok-key\""),
+        "JSON example on Pet schema must wrap object keys in .tok-key spans"
+    );
+    assert!(
+        html.contains("class=\"tok-string\""),
+        "JSON example on Pet schema must wrap string values in .tok-string spans"
+    );
+    assert!(
+        html.contains("class=\"tok-punct\""),
+        "JSON example on Pet schema must wrap structural punctuation in .tok-punct spans"
+    );
+}
+
+#[test]
+fn copy_button_present_on_endpoint_and_examples() {
+    let op_html = read("operations/getPet.html");
+    // MiniJinja escapes `/` to `&#x2f;` in attributes; JS reads the
+    // decoded form. Assert against substrings that survive escape.
+    assert!(
+        op_html.contains("data-copy-endpoint")
+            && op_html.contains("pets") && op_html.contains("{petId}"),
+        "operation page endpoint must carry a copy button targeting its path template"
+    );
+    let schema_html = read("schemas/Pet.html");
+    assert!(
+        schema_html.contains("data-copy-text="),
+        "Pet schema example block must carry a copy button with raw payload"
+    );
+}
+
 // ---------- M2: server picker + variable form ----------
 
 #[test]
