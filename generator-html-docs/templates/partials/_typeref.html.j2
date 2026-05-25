@@ -1,0 +1,5 @@
+{%- if t.is_link -%}
+  <a href="{{ t.href|safe }}"><code class="type-ref">{{ t.display }}</code></a>
+{%- else -%}
+  <code class="type-ref">{{ t.display }}</code>
+{%- endif -%}

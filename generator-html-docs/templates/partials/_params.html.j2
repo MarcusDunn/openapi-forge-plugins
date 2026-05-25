@@ -1,0 +1,20 @@
+{% if params %}
+<dl class="params">
+  {% for p in params %}
+  <dt>
+    <code class="param-name">{{ p.name }}</code>
+    <small class="param-meta">({{ p.location }}{% if p.required %}, required{% endif %}{% if p.deprecated %}, deprecated{% endif %})</small>
+    {% set t = p.type %}{% include "partials/_typeref.html.j2" %}
+  </dt>
+  <dd>
+    {% if p.description_html %}{{ p.description_html|safe }}{% endif %}
+    {% if p.example_json %}
+    <details class="example">
+      <summary>Example</summary>
+      <pre><code class="language-json">{{ p.example_json }}</code></pre>
+    </details>
+    {% endif %}
+  </dd>
+  {% endfor %}
+</dl>
+{% endif %}

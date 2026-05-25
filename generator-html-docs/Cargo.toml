@@ -1,0 +1,21 @@
+[package]
+name = "generator-html-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "OpenAPI Forge generator that emits a static HTML documentation site (multi-page, nested-tag nav, semantic markup)."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+forge-plugin-sdk = { workspace = true, features = ["generator"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+minijinja = { version = "2", default-features = false, features = ["builtins", "macros", "multi_template", "serde"] }
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+
+[lints.rust]
+unsafe_code = "deny"

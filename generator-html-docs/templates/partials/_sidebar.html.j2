@@ -1,0 +1,28 @@
+{% macro render_nav_node(tag) %}
+  {% set href = chrome.asset_prefix ~ "tags/" ~ tag.slug_path ~ "/index.html" %}
+  {% set is_current = chrome.current_path == "tags/" ~ tag.slug_path ~ "/index.html" %}
+  <li
+    role="treeitem"
+    data-tag="{{ tag.slug }}"
+    data-tag-path="{{ tag.slug_path|safe }}"
+    {% if tag.children %}aria-expanded="true"{% endif %}>
+    <a href="{{ href|safe }}"{% if is_current %} aria-current="page"{% endif %}>
+      <span class="nav-tree__name">{{ tag.name }}</span>
+      <span class="nav-tree__count" aria-label="{{ tag.total_op_count }} operations">{{ tag.total_op_count }}</span>
+    </a>
+    {% if tag.children %}
+    <ul>
+      {% for child in tag.children %}
+        {{ render_nav_node(child) }}
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </li>
+{% endmacro %}
+<nav aria-label="API tags">
+  <ul class="nav-tree" role="tree">
+    {% for tag in chrome.nav.roots %}
+      {{ render_nav_node(tag) }}
+    {% endfor %}
+  </ul>
+</nav>

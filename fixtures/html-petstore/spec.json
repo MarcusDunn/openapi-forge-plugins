@@ -1,0 +1,313 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "HTML Petstore",
+    "version": "1.0.0",
+    "summary": "Sample API for exercising generator-html-docs.",
+    "description": "A small petstore-style spec that **exercises every documentation surface** the generator renders:\n\n- Nested tags (`tag.parent`)\n- Markdown in descriptions (this list, `inline code`, [links](https://example.com))\n- A deprecated endpoint with a prominent banner\n- Schemas with examples and properties\n",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "contact": {
+      "name": "Pet Docs Team",
+      "email": "pets@example.com",
+      "url": "https://example.com/pets"
+    }
+  },
+  "servers": [
+    { "url": "https://api.example.com/v1", "description": "Production" },
+    { "url": "https://staging.example.com/v1", "description": "Staging" }
+  ],
+  "tags": [
+    {
+      "name": "pets",
+      "summary": "Pet operations",
+      "description": "Endpoints for **listing**, fetching, and managing pets. The two child tags split the operations by audience."
+    },
+    {
+      "name": "pets-public",
+      "parent": "pets",
+      "summary": "Public-facing pet endpoints",
+      "description": "Read-only endpoints available to any client. No auth required."
+    },
+    {
+      "name": "pets-admin",
+      "parent": "pets",
+      "summary": "Administrative pet endpoints",
+      "description": "Mutating endpoints that require staff credentials.\n\n> Calls here are audited."
+    },
+    {
+      "name": "owners",
+      "summary": "Owner directory",
+      "description": "Top-level tag for pet-owner lookup."
+    }
+  ],
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "tags": ["pets-public"],
+        "summary": "List all pets",
+        "description": "Returns every pet in the store. Pass `limit` to page.\n\nResults are sorted by `id` ascending.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of pets to return. Defaults to 20.",
+            "required": false,
+            "schema": { "type": "integer", "format": "int32", "maximum": 100 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A paged array of pets.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pets" }
+              }
+            }
+          },
+          "default": {
+            "description": "Unexpected error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "get": {
+        "operationId": "getPet",
+        "tags": ["pets-public"],
+        "summary": "Fetch a single pet",
+        "description": "Look up a pet by its `petId`.",
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "description": "Unique pet identifier.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The pet, if it exists.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pet" }
+              }
+            }
+          },
+          "404": {
+            "description": "No pet with this `petId`.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deletePet",
+        "tags": ["pets-admin"],
+        "summary": "Remove a pet",
+        "description": "Removes the pet from the store. Audited.",
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "description": "Pet to remove.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Deleted." },
+          "404": {
+            "description": "No pet with this id.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/admin/import": {
+      "post": {
+        "operationId": "importPets",
+        "tags": ["pets-admin"],
+        "summary": "Bulk-import pets",
+        "description": "Accepts an array of `Pet` records and inserts them in one transaction.\n\nReturns `202` while the import runs asynchronously.",
+        "requestBody": {
+          "required": true,
+          "description": "Pets to insert.",
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/Pets" }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Import accepted; check status separately.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ImportJob" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/legacySearch": {
+      "get": {
+        "operationId": "legacySearchPets",
+        "tags": ["pets-public"],
+        "deprecated": true,
+        "summary": "Search pets (deprecated)",
+        "description": "Free-text search over names. **Deprecated** in favour of `listPets` with structured filters.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Free-text query.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching pets.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pets" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/owners": {
+      "get": {
+        "operationId": "listOwners",
+        "tags": ["owners"],
+        "summary": "List owners",
+        "description": "Returns every registered owner.",
+        "responses": {
+          "200": {
+            "description": "Owner list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Owner" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/owners/{ownerId}": {
+      "get": {
+        "operationId": "getOwner",
+        "tags": ["owners"],
+        "summary": "Fetch an owner",
+        "parameters": [
+          {
+            "name": "ownerId",
+            "in": "path",
+            "required": true,
+            "description": "Owner identifier.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The owner.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Owner" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Pet": {
+        "type": "object",
+        "title": "Pet",
+        "description": "A pet in the store.",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Server-assigned identifier."
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Optional categorisation tag."
+          }
+        },
+        "examples": [
+          { "id": "pet_42", "name": "Whiskers", "tag": "cat" }
+        ]
+      },
+      "Pets": {
+        "type": "array",
+        "title": "Pets",
+        "description": "A page of pets.",
+        "items": { "$ref": "#/components/schemas/Pet" }
+      },
+      "Owner": {
+        "type": "object",
+        "title": "Owner",
+        "description": "A registered pet owner.",
+        "required": ["id", "email"],
+        "properties": {
+          "id": { "type": "string" },
+          "email": { "type": "string", "format": "email" },
+          "name": { "type": "string" }
+        }
+      },
+      "ImportJob": {
+        "type": "object",
+        "title": "ImportJob",
+        "description": "Status handle for an async bulk import.",
+        "required": ["jobId", "status"],
+        "properties": {
+          "jobId": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "running", "succeeded", "failed"]
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "title": "Error",
+        "description": "A problem details-style error payload.",
+        "required": ["code", "message"],
+        "properties": {
+          "code": { "type": "integer", "format": "int32" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}

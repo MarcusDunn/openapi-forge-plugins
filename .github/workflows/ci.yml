@@ -109,6 +109,17 @@ jobs:
             plugins: "generator-rust-clap (codegen shape)"
             work_dir: compile-test
             cargo_cmd: test --no-fail-fast
+          # generator-html-docs emits a multi-page static HTML site.
+          # The compile-test crate reads the generated files off disk
+          # and asserts structural properties (semantic landmarks,
+          # nested-tag DOM nesting, deprecation banner visibility,
+          # markdown rendering, cross-link integrity). Zero third-party
+          # deps — substring + data-* attribute assertions only,
+          # matching the clap-petstore codegen-shape pattern.
+          - fixture: html-petstore
+            plugins: "generator-html-docs"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
