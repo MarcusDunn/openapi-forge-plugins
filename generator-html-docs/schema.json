@@ -21,6 +21,10 @@
       "type": "string",
       "minLength": 1,
       "description": "Site origin used to render absolute <link rel=\"canonical\"> hrefs. Optional; internal navigation always uses relative URLs."
+    },
+    "enableTryIt": {
+      "type": "boolean",
+      "description": "When true (default), each operation page renders an in-browser request builder. Disable for read-only static docs or when CORS makes the runtime call useless."
     }
   }
 }

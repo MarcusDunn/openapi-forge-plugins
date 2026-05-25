@@ -543,6 +543,45 @@ fn op_page_response_article_has_id_anchor() {
     );
 }
 
+// ---------- M4: try-it request builder ----------
+
+#[test]
+fn op_page_renders_try_it_form_with_inputs_per_param() {
+    let html = read("operations/getPet.html");
+    assert!(
+        html.contains("data-tryit-form"),
+        "getPet op page must include a Try-it form"
+    );
+    assert!(
+        html.contains("data-method=\"GET\""),
+        "form must carry the operation's HTTP method"
+    );
+    assert!(html.contains("data-path-template"));
+    // path param `petId`
+    assert!(
+        html.contains("data-tryit-param") && html.contains("data-name=\"petId\""),
+        "form should carry an input for the petId path param"
+    );
+}
+
+#[test]
+fn op_with_body_renders_textarea_and_content_type_select() {
+    let html = read("operations/importPets.html");
+    assert!(html.contains("data-tryit-body"));
+    assert!(html.contains("data-tryit-content-type"));
+    // Escape-tolerant: MiniJinja encodes `/` as `&#x2f;` in attrs.
+    assert!(html.contains("data-tryit-content-type"));
+    assert!(html.contains("application") && html.contains("json"));
+}
+
+#[test]
+fn op_page_includes_try_it_send_button_and_response_block() {
+    let html = read("operations/listPets.html");
+    assert!(html.contains("data-tryit-send"));
+    assert!(html.contains("data-tryit-response"));
+    assert!(html.contains("data-tryit-response-status"));
+}
+
 // ---------- M3: JSON syntax highlighting + copy buttons ----------
 
 #[test]

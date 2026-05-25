@@ -196,6 +196,149 @@
     });
   }
 
+  // ---- try-it request builder ----
+
+  function highlightJsonClient(text) {
+    // Best-effort: re-parse and pretty-print. If it isn't JSON we
+    // return the text unwrapped (the browser will still render).
+    try {
+      var parsed = JSON.parse(text);
+      return JSON.stringify(parsed, null, 2);
+    } catch (e) {
+      return text;
+    }
+  }
+
+  function buildUrl(form) {
+    var template = form.dataset.pathTemplate;
+    var path = template.replace(/\{([^{}]+)\}/g, function (m, name) {
+      var input = form.querySelector('[data-tryit-param][data-name="' + cssEscape(name) + '"][data-location="path"]');
+      var v = input ? input.value : "";
+      return encodeURIComponent(v);
+    });
+    var query = [];
+    var queryInputs = form.querySelectorAll('[data-tryit-param][data-location="query"]');
+    Array.prototype.forEach.call(queryInputs, function (i) {
+      if (i.value !== "") query.push(encodeURIComponent(i.dataset.name) + "=" + encodeURIComponent(i.value));
+    });
+    var base = effectiveServerUrl() || "";
+    var url = base.replace(/\/+$/, "") + path;
+    if (query.length) url += (url.indexOf("?") === -1 ? "?" : "&") + query.join("&");
+    return url;
+  }
+
+  function collectHeaders(form) {
+    var h = {};
+    var inputs = form.querySelectorAll('[data-tryit-param][data-location="header"]');
+    Array.prototype.forEach.call(inputs, function (i) {
+      if (i.value !== "") h[i.dataset.name] = i.value;
+    });
+    return h;
+  }
+
+  function statusClass(status) {
+    if (status >= 200 && status < 300) return "status-2xx";
+    if (status >= 300 && status < 400) return "status-3xx";
+    if (status >= 400 && status < 500) return "status-4xx";
+    if (status >= 500 && status < 600) return "status-5xx";
+    if (status === 0) return "status-default";
+    return "status-1xx";
+  }
+
+  function cssEscape(s) {
+    if (window.CSS && window.CSS.escape) return window.CSS.escape(s);
+    // Minimal fallback: only escape what we'd actually see in a
+    // parameter name. OAS allows `[A-Za-z0-9_\-\.]`, none of which
+    // collide with CSS selector syntax.
+    return s.replace(/[^A-Za-z0-9_\-]/g, "_");
+  }
+
+  function refreshTryItEffective(form) {
+    var out = form.querySelector("[data-tryit-effective-url]");
+    if (!out) return;
+    try {
+      out.textContent = buildUrl(form);
+    } catch (e) {
+      out.textContent = "";
+    }
+  }
+
+  function sendTryIt(form) {
+    var btn = form.querySelector("[data-tryit-send]");
+    var statusOut = form.querySelector("[data-tryit-status]");
+    var responseBlock = form.querySelector("[data-tryit-response]");
+    var statusBadge = form.querySelector("[data-tryit-response-status]");
+    var statusText = form.querySelector("[data-tryit-response-status-text]");
+    var durationOut = form.querySelector("[data-tryit-response-duration]");
+    var headersDl = form.querySelector("[data-tryit-response-headers]");
+    var bodyEl = form.querySelector("[data-tryit-response-body]");
+
+    var url = buildUrl(form);
+    var method = form.dataset.method;
+    var headers = collectHeaders(form);
+    var bodyTextarea = form.querySelector("[data-tryit-body]");
+    var contentTypeSel = form.querySelector("[data-tryit-content-type]");
+    var body = null;
+    if (bodyTextarea && bodyTextarea.value !== "" && method !== "GET" && method !== "HEAD") {
+      body = bodyTextarea.value;
+      if (contentTypeSel && !headers["Content-Type"]) {
+        headers["Content-Type"] = contentTypeSel.value;
+      }
+    }
+
+    btn.disabled = true;
+    statusOut.textContent = "sending…";
+    var started = performance.now();
+    fetch(url, { method: method, headers: headers, body: body, credentials: "omit" })
+      .then(function (resp) {
+        var duration = Math.round(performance.now() - started);
+        statusOut.textContent = "";
+        durationOut.textContent = duration + " ms";
+        statusBadge.textContent = resp.status;
+        statusBadge.className = "status-badge " + statusClass(resp.status);
+        statusText.textContent = resp.statusText || "";
+        headersDl.innerHTML = "";
+        resp.headers.forEach(function (value, key) {
+          var dt = document.createElement("dt");
+          var dd = document.createElement("dd");
+          var code = document.createElement("code");
+          code.textContent = key;
+          dt.appendChild(code);
+          dd.textContent = value;
+          headersDl.appendChild(dt);
+          headersDl.appendChild(dd);
+        });
+        return resp.text().then(function (text) {
+          bodyEl.textContent = highlightJsonClient(text);
+        });
+      })
+      .catch(function (err) {
+        statusOut.textContent = "";
+        durationOut.textContent = "";
+        statusBadge.textContent = "—";
+        statusBadge.className = "status-badge status-default";
+        statusText.textContent = (err && err.message) ? err.message : "request failed (network / CORS)";
+        headersDl.innerHTML = "";
+        bodyEl.textContent = "";
+      })
+      .then(function () {
+        btn.disabled = false;
+        responseBlock.hidden = false;
+      });
+  }
+
+  function initTryIt() {
+    var forms = document.querySelectorAll("[data-tryit-form]");
+    Array.prototype.forEach.call(forms, function (form) {
+      // Keep the effective URL preview in sync as inputs / server / vars change.
+      refreshTryItEffective(form);
+      form.addEventListener("input", function () { refreshTryItEffective(form); });
+      window.openapiForge.on("serverchange", function () { refreshTryItEffective(form); });
+      var btn = form.querySelector("[data-tryit-send]");
+      if (btn) btn.addEventListener("click", function () { sendTryIt(form); });
+    });
+  }
+
   // ---- sidebar on-path highlighting ----
 
   function initSidebarOnPath() {
@@ -241,5 +384,6 @@
     initServerVariableForms();
     initSidebarOnPath();
     initCopyButtons();
+    initTryIt();
   });
 })();

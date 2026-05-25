@@ -89,6 +89,11 @@ pub fn env() -> Environment<'static> {
         include_str!("../templates/partials/_inline_schema.html.j2"),
     )
     .expect("inline-schema partial parses");
+    env.add_template(
+        "partials/_tryit.html.j2",
+        include_str!("../templates/partials/_tryit.html.j2"),
+    )
+    .expect("tryit partial parses");
     env
 }
 
@@ -974,9 +979,20 @@ pub struct OperationView {
     pub external_docs: Option<ExternalDocsView>,
     pub tag_links: Vec<TagLink>,
     pub security: Option<OpSecurityView>,
+    /// When `enableTryIt` is on, this is the request-body example
+    /// (if any) the form pre-fills its textarea with.
+    pub try_it_body_seed: Option<String>,
+    /// Honor the `enableTryIt` config knob.
+    pub try_it_enabled: bool,
 }
 
-pub fn operation_view(spec: &Ir, nav: &Nav, asset_prefix: &str, op: &Operation) -> OperationView {
+pub fn operation_view(
+    spec: &Ir,
+    nav: &Nav,
+    cfg: &Config,
+    asset_prefix: &str,
+    op: &Operation,
+) -> OperationView {
     let mut parameters = Vec::new();
     for p in &op.path_params {
         parameters.push(param_view(spec, asset_prefix, p, "path"));
@@ -1024,6 +1040,12 @@ pub fn operation_view(spec: &Ir, nav: &Nav, asset_prefix: &str, op: &Operation) 
         external_docs: op.external_docs.as_ref().map(ext_docs_view),
         tag_links,
         security: op_security_view(asset_prefix, spec, op),
+        try_it_enabled: cfg.enable_try_it,
+        try_it_body_seed: op.request_body.as_ref().and_then(|b| {
+            b.content
+                .iter()
+                .find_map(|c| first_example(spec, &c.examples).map(|ex| ex.raw))
+        }),
     }
 }
 
@@ -1590,7 +1612,7 @@ pub fn operation_page(
 ) -> Result<Page, RenderError> {
     let current_path = paths::operation_page_path(&op.id);
     let asset_prefix = paths::asset_prefix(&current_path);
-    let view = operation_view(spec, nav, &asset_prefix, op);
+    let view = operation_view(spec, nav, cfg, &asset_prefix, op);
     let title = view.summary.clone().unwrap_or_else(|| view.id.clone());
     let description = op
         .description

@@ -11,6 +11,12 @@ pub struct Config {
     pub include_schemas: bool,
     #[serde(default)]
     pub base_url: Option<String>,
+    /// When `true` (default), each operation page renders an
+    /// in-browser request builder that sends a real `fetch()` to the
+    /// currently picked server. Disable for read-only static docs or
+    /// when CORS makes the runtime call useless.
+    #[serde(default = "default_true")]
+    pub enable_try_it: bool,
 }
 
 impl Default for Config {
@@ -20,6 +26,7 @@ impl Default for Config {
             theme: Theme::default(),
             include_schemas: true,
             base_url: None,
+            enable_try_it: true,
         }
     }
 }
