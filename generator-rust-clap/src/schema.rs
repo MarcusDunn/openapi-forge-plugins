@@ -219,7 +219,7 @@ impl<'a> Renderer<'a> {
         for p in &o.properties {
             let mut child = self.render_ref(&p.r#type);
             if let Value::Object(cm) = &mut child {
-                if let Some(doc) = &p.documentation {
+                if let Some(doc) = &p.description {
                     cm.entry("description".to_string())
                         .or_insert(Value::String(doc.clone()));
                 }
@@ -372,7 +372,7 @@ fn decorate(schema: &mut Value, named: &NamedType, values: &[IrValue]) {
         m.entry("title".to_string())
             .or_insert(Value::String(t.clone()));
     }
-    if let Some(d) = &named.documentation {
+    if let Some(d) = &named.description {
         m.entry("description".to_string())
             .or_insert(Value::String(d.clone()));
     }

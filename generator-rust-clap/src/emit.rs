@@ -1376,7 +1376,8 @@ fn render_op_variant(
     exchange: Option<&TokenExchangeInfo>,
 ) -> TokenStream {
     let variant = format_ident!("{}", pascal_case(&op.id));
-    let doc_attr = first_line(op.documentation.as_deref()).map(|d| quote!(#[doc = #d]));
+    let doc_attr = first_line(op.description.as_deref().or(op.summary.as_deref()))
+        .map(|d| quote!(#[doc = #d]));
     let exclude = exchange
         .filter(|ex| op_uses_placeholder(op, &ex.placeholder))
         .map(|ex| ex.placeholder.as_str());
@@ -2209,7 +2210,7 @@ fn field_for_param(spec: &Ir, p: &Parameter, kind: FieldKind, relax: &[&str]) ->
     Field {
         ident: field_ident,
         ty,
-        doc: first_line(p.documentation.as_deref()),
+        doc: first_line(p.description.as_deref()),
         arg_attr,
     }
 }
