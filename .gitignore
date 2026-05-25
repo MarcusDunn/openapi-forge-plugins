@@ -6,4 +6,4 @@ Cargo.lock.bak
 # generates these whenever CI runs `cargo build` to verify the generator's
 # output compiles.
 fixtures/**/out/
-
+.claude

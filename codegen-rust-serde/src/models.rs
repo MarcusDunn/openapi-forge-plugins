@@ -66,7 +66,7 @@ fn render_named(spec: &ir::Ir, named: &ir::NamedType) -> TokenStream {
         return TokenStream::new();
     }
     let name = format_ident!("{}", naming::rust_type_name(named));
-    let docs = doc_attrs(&named.documentation);
+    let docs = doc_attrs(&named.description);
     match &named.definition {
         ir::TypeDef::Object(o) => render_struct(spec, &name, &docs, o),
         ir::TypeDef::EnumString(e) => render_string_enum(&name, &docs, e),
@@ -193,7 +193,7 @@ fn render_struct(
     }
     let mut fields = TokenStream::new();
     for prop in &o.properties {
-        let prop_docs = doc_attrs(&prop.documentation);
+        let prop_docs = doc_attrs(&prop.description);
         let rust_name = naming::snake_case(&prop.name);
         let field_ident = types::ident(&rust_name);
         let rename_needed = strip_raw(&rust_name) != prop.name;
@@ -274,11 +274,9 @@ fn render_string_enum(name: &Ident, docs: &TokenStream, e: &ir::EnumStringType) 
     let mut variants = TokenStream::new();
     let mut display_arms = TokenStream::new();
     for value in &e.values {
-        let variant_docs = doc_attrs(&value.documentation);
         let variant = format_ident!("{}", naming::pascal_case(&value.value));
         let wire = &value.value;
         variants.extend(quote! {
-            #variant_docs
             #[serde(rename = #wire)]
             #variant,
         });
@@ -309,11 +307,9 @@ fn render_int_enum(name: &Ident, docs: &TokenStream, e: &ir::EnumIntType) -> Tok
     let mut to_arms = TokenStream::new();
     let mut from_arms = TokenStream::new();
     for value in &e.values {
-        let variant_docs = doc_attrs(&value.documentation);
         let variant = format_ident!("{}", int_variant_name(value.value));
         let val_lit = Literal::i64_unsuffixed(value.value);
         variants.extend(quote! {
-            #variant_docs
             #variant,
         });
         to_arms.extend(quote! { #name::#variant => #val_lit, });

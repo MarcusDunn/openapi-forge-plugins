@@ -44,7 +44,7 @@ pub fn render(spec: &ir::Ir, op: &ir::Operation) -> TokenStream {
 }
 
 fn render_request_struct(spec: &ir::Ir, op: &ir::Operation, name: &Ident) -> TokenStream {
-    let docs = doc_attrs(&op.documentation);
+    let docs = doc_attrs(&op.description.clone().or_else(|| op.summary.clone()));
     let mut fields = TokenStream::new();
     for p in &op.path_params {
         let field = types::ident(&naming::snake_case(&p.name));
