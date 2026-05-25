@@ -55,6 +55,12 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
     }
 
     if cfg.include_schemas {
+        // Synthetic IR types (`*_property_*`, `*_param_*`, etc.) do
+        // NOT get their own page. They're inlined under the property /
+        // parameter / response they belong to on the parent's page —
+        // see `render::inline_schema_view`. Emitting one page per
+        // synthetic blew the wasm hostcall fuel budget on real-world
+        // specs (DialAI: ~3000 synthetic types).
         for t in &spec.types {
             if t.id == forge_plugin_sdk::ir::NULL_ID {
                 continue;

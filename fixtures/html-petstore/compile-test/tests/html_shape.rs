@@ -508,6 +508,41 @@ fn op_returning_discriminated_union_inlines_discriminator() {
     );
 }
 
+// ---------- synthetic-name typeref links land on the ancestor page ----------
+
+#[test]
+fn schema_page_property_dt_has_id_anchor() {
+    // Pet has `id`, `name`, `tag` properties — each <dt> should carry
+    // a stable `id="property-<name>"` anchor that synthetic-link
+    // hrefs can target.
+    let html = read("schemas/Pet.html");
+    for name in ["id", "name", "tag"] {
+        assert!(
+            html.contains(&format!("id=\"property-{name}\"")),
+            "Pet schema <dt> for property `{name}` must carry an id anchor"
+        );
+    }
+}
+
+#[test]
+fn op_page_param_dt_has_id_anchor() {
+    // listPets's `limit` query param.
+    let html = read("operations/listPets.html");
+    assert!(
+        html.contains("id=\"param-query-limit\""),
+        "listPets `<dt>` for the limit query param must carry an id anchor"
+    );
+}
+
+#[test]
+fn op_page_response_article_has_id_anchor() {
+    let html = read("operations/listPets.html");
+    assert!(
+        html.contains("id=\"response-200\""),
+        "listPets 200 response <article> must carry an id anchor"
+    );
+}
+
 // ---------- M1: server variables ----------
 
 #[test]

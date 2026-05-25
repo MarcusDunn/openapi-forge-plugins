@@ -83,6 +83,11 @@ pub fn env() -> Environment<'static> {
         include_str!("../templates/partials/_discriminator.html.j2"),
     )
     .expect("discriminator partial parses");
+    env.add_template(
+        "partials/_inline_schema.html.j2",
+        include_str!("../templates/partials/_inline_schema.html.j2"),
+    )
+    .expect("inline-schema partial parses");
     env
 }
 
@@ -103,6 +108,17 @@ pub struct ChromeCtx<'a> {
     pub has_security: bool,
     pub api_version: &'a str,
     pub nav: &'a Nav,
+    /// Slim views fed to the header server picker. Stored on chrome so
+    /// every page can render the picker without re-walking the IR.
+    pub pickable_servers: Vec<PickableServer>,
+}
+
+/// One entry in the header's server `<select>`. Stays lean: the full
+/// editable variable form lives on the landing page (`ServerView`).
+#[derive(Serialize)]
+pub struct PickableServer {
+    pub url: String,
+    pub label: String,
 }
 
 impl<'a> ChromeCtx<'a> {
@@ -127,6 +143,18 @@ impl<'a> ChromeCtx<'a> {
             .base_url
             .as_deref()
             .map(|b| format!("{}/{}", b.trim_end_matches('/'), current_path));
+        let pickable_servers = spec
+            .servers
+            .iter()
+            .map(|s| PickableServer {
+                url: s.url.clone(),
+                label: s
+                    .name
+                    .clone()
+                    .or_else(|| s.description.clone())
+                    .unwrap_or_else(|| s.url.clone()),
+            })
+            .collect();
         Self {
             title,
             page_title,
@@ -141,6 +169,7 @@ impl<'a> ChromeCtx<'a> {
             has_security: !spec.security_schemes.is_empty(),
             api_version: spec.info.version.as_str(),
             nav,
+            pickable_servers,
         }
     }
 }
@@ -405,6 +434,214 @@ pub struct TypeRefView {
     pub is_link: bool,
 }
 
+/// Maximum depth at which we inline synthetic schemas under a parent.
+/// Beyond this, we fall back to the bare typeref (rendering deeper
+/// chains would balloon page size; the depth cap also kills any
+/// pathological self-recursion that slipped past the IR's
+/// acyclic-types invariant).
+const INLINE_DEPTH_LIMIT: usize = 4;
+
+/// One inline property inside an inlined synthetic object.
+#[derive(Serialize, Clone, Debug)]
+pub struct InlineProperty {
+    pub name: String,
+    pub required: bool,
+    pub deprecated: bool,
+    pub description_html: Option<String>,
+    pub r#type: TypeRefView,
+    /// Nested inline shape when this property's type is itself
+    /// synthetic. Bounded by [`INLINE_DEPTH_LIMIT`].
+    pub inline: Option<Box<InlineSchemaView>>,
+}
+
+/// Inlined shape of a synthetic schema — rendered under a `<details>`
+/// on its parent's page so the reader sees "what is this type" without
+/// a page round-trip.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct InlineSchemaView {
+    pub kind: &'static str,
+    pub description_html: Option<String>,
+    pub properties: Vec<InlineProperty>,
+    /// `"forbidden"` / `"any"` / `"typed"` / `""` (the empty string
+    /// when the kind is not object). Mirrors the schema page's
+    /// rendering of `AdditionalProperties`.
+    pub additional_properties_kind: &'static str,
+    pub additional_properties_type: Option<TypeRefView>,
+    /// For arrays: the items' typeref + (optionally) its own inline shape.
+    pub items: Option<TypeRefView>,
+    pub items_inline: Option<Box<InlineSchemaView>>,
+    pub enum_values: Vec<String>,
+    pub union_variants: Vec<TypeRefView>,
+    pub union_kind: &'static str,
+    pub discriminator: Option<DiscriminatorView>,
+}
+
+/// Display label for a synthetic NamedType, derived from its
+/// underlying kind. We don't emit pages for synthetics (their ids
+/// like `ErrorResponseV2_property_traceId` would just confuse a
+/// reader), so the label is structural: `object`, `enum`,
+/// `string | null`, etc. The structural detail lives in the
+/// `inline_type` partial.
+fn synthetic_display(spec: &Ir, asset_prefix: &str, t: &NamedType) -> String {
+    match &t.definition {
+        TypeDef::Primitive(p) => {
+            // Defensive — `render_typeref` already handles primitive
+            // synthetics via its Primitive arm.
+            let kind = match p.kind {
+                forge_plugin_sdk::ir::PrimitiveKind::String => "string",
+                forge_plugin_sdk::ir::PrimitiveKind::Integer => "integer",
+                forge_plugin_sdk::ir::PrimitiveKind::Number => "number",
+                forge_plugin_sdk::ir::PrimitiveKind::Bool => "boolean",
+            };
+            kind.to_string()
+        }
+        TypeDef::Null => "null".to_string(),
+        TypeDef::Object(_) => "object".to_string(),
+        TypeDef::Array(a) => {
+            let inner = render_typeref(spec, asset_prefix, &a.items);
+            format!("[{}]", inner.display)
+        }
+        TypeDef::EnumString(_) => "enum<string>".to_string(),
+        TypeDef::EnumInt(_) => "enum<integer>".to_string(),
+        TypeDef::Union(u) => {
+            // List the variants joined by `|`. Each variant's display
+            // recurses through `render_typeref`, so a nested `T | null`
+            // shows as `T | null` and not the synthetic id.
+            u.variants
+                .iter()
+                .map(|v| render_typeref(spec, asset_prefix, &v.r#type).display)
+                .collect::<Vec<_>>()
+                .join(" | ")
+        }
+    }
+}
+
+/// Resolve `tref`. When it's a synthetic non-primitive, also return
+/// the inlined shape so the parent template can expand it.
+pub fn render_typeref_with_inline(
+    spec: &Ir,
+    asset_prefix: &str,
+    tref: &TypeRef,
+) -> (TypeRefView, Option<InlineSchemaView>) {
+    let view = render_typeref(spec, asset_prefix, tref);
+    let inline = build_inline_for(spec, asset_prefix, tref, 0);
+    (view, inline)
+}
+
+/// Build an inline view of `tref` if it's a synthetic non-primitive
+/// (and we're under the depth limit).
+fn build_inline_for(
+    spec: &Ir,
+    asset_prefix: &str,
+    tref: &TypeRef,
+    depth: usize,
+) -> Option<InlineSchemaView> {
+    if depth >= INLINE_DEPTH_LIMIT {
+        return None;
+    }
+    let t = spec.types.iter().find(|t| t.id == *tref)?;
+    if !schema_filter::is_synthetic_id(&t.id) {
+        return None;
+    }
+    // Primitives and null have no structure to expand — the bare
+    // type display in the parent already says everything.
+    if matches!(t.definition, TypeDef::Primitive(_) | TypeDef::Null) {
+        return None;
+    }
+    Some(inline_schema_view(spec, asset_prefix, t, depth))
+}
+
+fn inline_schema_view(
+    spec: &Ir,
+    asset_prefix: &str,
+    t: &NamedType,
+    depth: usize,
+) -> InlineSchemaView {
+    let mut view = InlineSchemaView {
+        kind: "",
+        // The parent (property / parameter / response) already
+        // renders the description in its <dd>; rendering it again
+        // inside the inline expansion duplicates it.
+        description_html: None,
+        properties: Vec::new(),
+        additional_properties_kind: "",
+        additional_properties_type: None,
+        items: None,
+        items_inline: None,
+        enum_values: Vec::new(),
+        union_variants: Vec::new(),
+        union_kind: "",
+        discriminator: None,
+    };
+    match &t.definition {
+        TypeDef::Primitive(_) | TypeDef::Null => {
+            // Caller shouldn't ask for inline expansion on primitives /
+            // null, but be defensive: empty view means "nothing extra
+            // to show".
+        }
+        TypeDef::Object(o) => {
+            view.kind = "object";
+            view.properties = o
+                .properties
+                .iter()
+                .map(|p| InlineProperty {
+                    name: p.name.clone(),
+                    required: p.required,
+                    deprecated: p.deprecated,
+                    description_html: markdown::render_opt(p.description.as_deref()),
+                    r#type: render_typeref(spec, asset_prefix, &p.r#type),
+                    inline: build_inline_for(spec, asset_prefix, &p.r#type, depth + 1)
+                        .map(Box::new),
+                })
+                .collect();
+            match &o.additional_properties {
+                AdditionalProperties::Forbidden => {
+                    view.additional_properties_kind = "forbidden";
+                }
+                AdditionalProperties::Any => {
+                    view.additional_properties_kind = "any";
+                }
+                AdditionalProperties::Typed { r#type } => {
+                    view.additional_properties_kind = "typed";
+                    view.additional_properties_type =
+                        Some(render_typeref(spec, asset_prefix, r#type));
+                }
+            }
+        }
+        TypeDef::Array(a) => {
+            view.kind = "array";
+            view.items = Some(render_typeref(spec, asset_prefix, &a.items));
+            view.items_inline =
+                build_inline_for(spec, asset_prefix, &a.items, depth + 1).map(Box::new);
+        }
+        TypeDef::EnumString(e) => {
+            view.kind = "enum-string";
+            view.enum_values = e.values.iter().map(|v| v.value.clone()).collect();
+        }
+        TypeDef::EnumInt(e) => {
+            view.kind = "enum-int";
+            view.enum_values = e.values.iter().map(|v| v.value.to_string()).collect();
+        }
+        TypeDef::Union(u) => {
+            view.kind = "union";
+            view.union_kind = match u.kind {
+                forge_plugin_sdk::ir::UnionKind::OneOf => "one-of",
+                forge_plugin_sdk::ir::UnionKind::AnyOf => "any-of",
+            };
+            view.union_variants = u
+                .variants
+                .iter()
+                .map(|v| render_typeref(spec, asset_prefix, &v.r#type))
+                .collect();
+            view.discriminator = u
+                .discriminator
+                .as_ref()
+                .map(|d| discriminator_view(spec, asset_prefix, d));
+        }
+    }
+    view
+}
+
 pub fn render_typeref(spec: &Ir, asset_prefix: &str, tref: &TypeRef) -> TypeRefView {
     if tref.is_empty() {
         return TypeRefView {
@@ -447,16 +684,21 @@ pub fn render_typeref(spec: &Ir, asset_prefix: &str, tref: &TypeRef) -> TypeRefV
                 is_link: false,
             },
             _ => {
-                let label = t.title.as_deref().unwrap_or(t.id.as_str()).to_owned();
                 if schema_filter::is_synthetic_id(&t.id) {
-                    // No emitted page — render as a non-link code span
-                    // so we don't produce a dead href.
+                    // Synthetic types don't get their own page; the
+                    // structure renders in an inline `<details>`
+                    // under the parent (`inline_type`). The label
+                    // here is derived from the *underlying kind*, not
+                    // the synthetic id, so readers see "object" /
+                    // "string | null" rather than
+                    // "ErrorResponseV2_property_traceId".
                     TypeRefView {
-                        display: label,
+                        display: synthetic_display(spec, asset_prefix, t),
                         href: None,
                         is_link: false,
                     }
                 } else {
+                    let label = t.title.as_deref().unwrap_or(t.id.as_str()).to_owned();
                     let href = format!("{}{}", asset_prefix, paths::schema_page_path(&t.id));
                     TypeRefView {
                         display: label,
@@ -481,6 +723,7 @@ pub struct ParamView {
     pub name: String,
     pub location: &'static str,
     pub r#type: TypeRefView,
+    pub inline_type: Option<InlineSchemaView>,
     pub required: bool,
     pub deprecated: bool,
     pub description_html: Option<String>,
@@ -502,10 +745,12 @@ fn first_example_json(
 }
 
 fn param_view(spec: &Ir, asset_prefix: &str, p: &Parameter, location: &'static str) -> ParamView {
+    let (r#type, inline_type) = render_typeref_with_inline(spec, asset_prefix, &p.r#type);
     ParamView {
         name: p.name.clone(),
         location,
-        r#type: render_typeref(spec, asset_prefix, &p.r#type),
+        r#type,
+        inline_type,
         required: p.required,
         deprecated: p.deprecated,
         description_html: markdown::render_opt(p.description.as_deref()),
@@ -519,6 +764,7 @@ fn param_view(spec: &Ir, asset_prefix: &str, p: &Parameter, location: &'static s
 pub struct MediaTypeView {
     pub media_type: String,
     pub r#type: TypeRefView,
+    pub inline_type: Option<InlineSchemaView>,
     pub example_json: Option<String>,
     /// When the media type's schema is a discriminated union, the
     /// disambiguation rule is inlined here so callers see it without
@@ -527,9 +773,11 @@ pub struct MediaTypeView {
 }
 
 fn body_content_view(spec: &Ir, asset_prefix: &str, c: &BodyContent) -> MediaTypeView {
+    let (r#type, inline_type) = render_typeref_with_inline(spec, asset_prefix, &c.r#type);
     MediaTypeView {
         media_type: c.media_type.clone(),
-        r#type: render_typeref(spec, asset_prefix, &c.r#type),
+        r#type,
+        inline_type,
         example_json: first_example_json(spec, &c.examples),
         discriminator: discriminator_for_typeref(spec, asset_prefix, &c.r#type),
     }
@@ -558,15 +806,18 @@ fn body_view(spec: &Ir, asset_prefix: &str, b: &Body) -> BodyView {
 pub struct HeaderView {
     pub name: String,
     pub r#type: TypeRefView,
+    pub inline_type: Option<InlineSchemaView>,
     pub required: bool,
     pub deprecated: bool,
     pub description_html: Option<String>,
 }
 
 fn header_view(spec: &Ir, asset_prefix: &str, name: &str, h: &Header) -> HeaderView {
+    let (r#type, inline_type) = render_typeref_with_inline(spec, asset_prefix, &h.r#type);
     HeaderView {
         name: name.into(),
-        r#type: render_typeref(spec, asset_prefix, &h.r#type),
+        r#type,
+        inline_type,
         required: h.required,
         deprecated: h.deprecated,
         description_html: markdown::render_opt(h.description.as_deref()),
@@ -778,6 +1029,7 @@ pub fn find_tag<'a>(roots: &'a [crate::nav::NavTag], name: &str) -> Option<&'a c
 pub struct PropertyView {
     pub name: String,
     pub r#type: TypeRefView,
+    pub inline_type: Option<InlineSchemaView>,
     pub required: bool,
     pub deprecated: bool,
     pub description_html: Option<String>,
@@ -929,12 +1181,17 @@ pub fn schema_view(
             view.properties = o
                 .properties
                 .iter()
-                .map(|p: &Property| PropertyView {
-                    name: p.name.clone(),
-                    r#type: render_typeref(spec, asset_prefix, &p.r#type),
-                    required: p.required,
-                    deprecated: p.deprecated,
-                    description_html: markdown::render_opt(p.description.as_deref()),
+                .map(|p: &Property| {
+                    let (r#type, inline_type) =
+                        render_typeref_with_inline(spec, asset_prefix, &p.r#type);
+                    PropertyView {
+                        name: p.name.clone(),
+                        r#type,
+                        inline_type,
+                        required: p.required,
+                        deprecated: p.deprecated,
+                        description_html: markdown::render_opt(p.description.as_deref()),
+                    }
                 })
                 .collect();
             match &o.additional_properties {

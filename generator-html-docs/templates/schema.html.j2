@@ -22,12 +22,20 @@
     {% if schema.properties %}
     <dl class="properties">
       {% for p in schema.properties %}
-      <dt data-property="{{ p.name }}">
+      <dt id="property-{{ p.name }}" data-property="{{ p.name }}">
         <code>{{ p.name }}</code>
         <small>({% if p.required %}required{% else %}optional{% endif %}{% if p.deprecated %}, deprecated{% endif %})</small>
         {% set t = p.type %}{% include "partials/_typeref.html.j2" %}
       </dt>
-      <dd>{% if p.description_html %}{{ p.description_html|safe }}{% endif %}</dd>
+      <dd>
+        {% if p.description_html %}{{ p.description_html|safe }}{% endif %}
+        {% if p.inline_type %}
+        <details class="inline-nested">
+          <summary>structure</summary>
+          {% set inline = p.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+        </details>
+        {% endif %}
+      </dd>
       {% endfor %}
     </dl>
     {% else %}

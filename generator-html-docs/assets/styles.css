@@ -442,3 +442,29 @@ ul.schemas-list .schema-title { font-weight: 600; }
   margin: 0;
 }
 .discriminator-mapping dt code { font-weight: 500; }
+
+/* ---- inline expanded synthetic schemas ---- */
+.inline-nested {
+  margin-top: 0.25rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-muted);
+  border-left: 2px solid var(--border);
+  border-radius: 0 4px 4px 0;
+}
+.inline-nested > summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+dl.inline-properties {
+  margin: 0.4rem 0 0 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 0.3rem 0.75rem;
+}
+dl.inline-properties dt { font-weight: 500; }
+dl.inline-properties dt small,
+.inline-nested small { color: var(--fg-muted); font-weight: normal; }
+@media (max-width: 600px) {
+  dl.inline-properties { grid-template-columns: 1fr; }
+}

@@ -50,6 +50,12 @@
       <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
       {% set discriminator = c.discriminator %}
       {% include "partials/_discriminator.html.j2" %}
+      {% if c.inline_type %}
+      <details class="inline-nested">
+        <summary>structure</summary>
+        {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+      </details>
+      {% endif %}
       {% if c.example_json %}
         {% set example = c.example_json %}
         {% include "partials/_example.html.j2" %}
@@ -63,7 +69,7 @@
     <h2 id="responses-heading">Responses</h2>
     {% if op.responses %}
       {% for r in op.responses %}
-      <article data-status="{{ r.status }}" class="response">
+      <article id="response-{{ r.status }}" data-status="{{ r.status }}" class="response">
         <h3>
           <code class="status-badge {{ r.status_class }}">{{ r.status }}</code>
           {% if r.summary %}{{ r.summary }}{% endif %}
@@ -79,7 +85,15 @@
               <small>({% if h.required %}required{% else %}optional{% endif %}{% if h.deprecated %}, deprecated{% endif %})</small>
               {% set t = h.type %}{% include "partials/_typeref.html.j2" %}
             </dt>
-            <dd>{% if h.description_html %}{{ h.description_html|safe }}{% endif %}</dd>
+            <dd>
+              {% if h.description_html %}{{ h.description_html|safe }}{% endif %}
+              {% if h.inline_type %}
+              <details class="inline-nested">
+                <summary>structure</summary>
+                {% set inline = h.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+              </details>
+              {% endif %}
+            </dd>
             {% endfor %}
           </dl>
         </section>
@@ -93,6 +107,12 @@
             <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
             {% set discriminator = c.discriminator %}
             {% include "partials/_discriminator.html.j2" %}
+            {% if c.inline_type %}
+            <details class="inline-nested">
+              <summary>structure</summary>
+              {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+            </details>
+            {% endif %}
             {% if c.example_json %}
               {% set example = c.example_json %}
               {% include "partials/_example.html.j2" %}
