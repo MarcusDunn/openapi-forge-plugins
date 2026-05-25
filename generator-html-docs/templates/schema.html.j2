@@ -1,0 +1,104 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="schema-title" data-schema-id="{{ schema.id }}" data-schema-kind="{{ schema.kind }}">
+  <header>
+    <h1 id="schema-title">{{ schema.title if schema.title else schema.id }}</h1>
+    <p><small>Schema id: <code>{{ schema.id }}</code> — kind: <code>{{ schema.kind }}</code></small></p>
+    {% if schema.deprecated %}
+    <p role="status" class="deprecated-banner"><strong>Deprecated.</strong></p>
+    {% endif %}
+  </header>
+
+  {% if schema.description_html %}
+  <section aria-labelledby="schema-description-heading">
+    <h2 id="schema-description-heading">Description</h2>
+    {{ schema.description_html|safe }}
+  </section>
+  {% endif %}
+
+  {% if schema.kind == "object" %}
+  <section aria-labelledby="properties-heading">
+    <h2 id="properties-heading">Properties</h2>
+    {% if schema.properties %}
+    <dl class="properties">
+      {% for p in schema.properties %}
+      <dt data-property="{{ p.name }}">
+        <code>{{ p.name }}</code>
+        <small>({% if p.required %}required{% else %}optional{% endif %}{% if p.deprecated %}, deprecated{% endif %})</small>
+        {% set t = p.type %}{% include "partials/_typeref.html.j2" %}
+      </dt>
+      <dd>{% if p.description_html %}{{ p.description_html|safe }}{% endif %}</dd>
+      {% endfor %}
+    </dl>
+    {% else %}
+    <p><em>This object declares no properties.</em></p>
+    {% endif %}
+    <p>
+      <small>
+        Additional properties:
+        {% if schema.additional_properties_kind == "forbidden" %}
+          <strong>forbidden</strong>
+        {% elif schema.additional_properties_kind == "any" %}
+          allowed (any type)
+        {% else %}
+          typed as {% set t = schema.additional_properties_type %}{% include "partials/_typeref.html.j2" %}
+        {% endif %}
+      </small>
+    </p>
+  </section>
+  {% elif schema.kind == "array" %}
+  <section aria-labelledby="items-heading">
+    <h2 id="items-heading">Items</h2>
+    <p>Each element is {% set t = schema.array_items %}{% include "partials/_typeref.html.j2" %}.</p>
+  </section>
+  {% elif schema.kind == "enum-string" or schema.kind == "enum-int" %}
+  <section aria-labelledby="enum-heading">
+    <h2 id="enum-heading">Allowed values</h2>
+    <ul class="enum-values">
+      {% for v in schema.enum_values %}
+      <li><code>{{ v }}</code></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% elif schema.kind == "union" %}
+  <section aria-labelledby="variants-heading">
+    <h2 id="variants-heading">Variants <small>({{ schema.union_kind }})</small></h2>
+    <ul class="union-variants">
+      {% for v in schema.union_variants %}
+      <li>{% set t = v %}{% include "partials/_typeref.html.j2" %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% elif schema.kind == "primitive" %}
+  <section aria-labelledby="primitive-heading">
+    <h2 id="primitive-heading">Primitive</h2>
+    <p>Underlying type: {% set t = schema.array_items %}{% include "partials/_typeref.html.j2" %}.</p>
+  </section>
+  {% endif %}
+
+  {% if schema.example_json %}
+  <section aria-labelledby="example-heading">
+    <h2 id="example-heading">Example</h2>
+    {% set example = schema.example_json %}
+    {% include "partials/_example.html.j2" %}
+  </section>
+  {% endif %}
+
+  {% if schema.used_in %}
+  <section aria-labelledby="used-in-heading">
+    <h2 id="used-in-heading">Used in</h2>
+    <ul class="used-in">
+      {% for op in schema.used_in %}
+      <li>
+        <a href="{{ op.href|safe }}">
+          <code class="method-badge {{ op.method_class }}">{{ op.method }}</code>
+          <code class="path">{{ op.path_template }}</code>
+          <span class="op-id">{{ op.id }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}

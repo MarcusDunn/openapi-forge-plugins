@@ -1,0 +1,62 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="tag-title">
+  <header>
+    <h1 id="tag-title">{{ tag.name }}</h1>
+    {% if tag.summary %}<p class="lede">{{ tag.summary }}</p>{% endif %}
+    {% if tag.external_docs_url %}
+    <p class="external-docs">
+      <a href="{{ tag.external_docs_url }}">
+        {{ tag.external_docs_description if tag.external_docs_description else tag.external_docs_url }}
+      </a>
+    </p>
+    {% endif %}
+  </header>
+
+  {% if tag.description_html %}
+  <section aria-labelledby="tag-description-heading">
+    <h2 id="tag-description-heading">Overview</h2>
+    {{ tag.description_html|safe }}
+  </section>
+  {% endif %}
+
+  {% if child_links %}
+  <section aria-labelledby="child-tags-heading">
+    <h2 id="child-tags-heading">Sub-tags</h2>
+    <ul class="child-tags">
+      {% for c in child_links %}
+      <li>
+        <a href="{{ c.href|safe }}">{{ c.name }}</a>
+        {% if c.summary %}<small>— {{ c.summary }}</small>{% endif %}
+        <span class="op-count">({{ c.op_count }} ops)</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if tag.operations %}
+  <section aria-labelledby="operations-heading">
+    <h2 id="operations-heading">Operations</h2>
+    <ol class="operation-list">
+      {% for op in tag.operations %}
+      <li data-operation-id="{{ op.id }}">
+        <article aria-labelledby="op-{{ op.id }}-heading">
+          <h3 id="op-{{ op.id }}-heading">
+            <a href="{{ chrome.asset_prefix|safe }}operations/{{ op.id }}.html">
+              <code class="method-badge {{ op.method_class }}" aria-label="HTTP method {{ op.method }}">{{ op.method }}</code>
+              <code class="path">{{ op.path_template }}</code>
+            </a>
+          </h3>
+          {% if op.summary %}<p>{{ op.summary }}</p>{% endif %}
+          {% if op.deprecated %}<p role="status" class="badge-deprecated">deprecated</p>{% endif %}
+        </article>
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% else %}
+  <p><em>No operations are tagged here directly.</em></p>
+  {% endif %}
+</article>
+{% endblock %}

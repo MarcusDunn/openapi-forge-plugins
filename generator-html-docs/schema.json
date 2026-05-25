@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Overrides info.title in the <title> element and site header. Defaults to info.title."
+    },
+    "theme": {
+      "type": "string",
+      "enum": ["light", "dark", "auto"],
+      "description": "Initial colour theme. 'auto' (default) follows the user's prefers-color-scheme; the toggle in the header switches and persists."
+    },
+    "includeSchemas": {
+      "type": "boolean",
+      "description": "Whether to emit per-schema pages under schemas/. Defaults to true."
+    },
+    "baseUrl": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Site origin used to render absolute <link rel=\"canonical\"> hrefs. Optional; internal navigation always uses relative URLs."
+    }
+  }
+}

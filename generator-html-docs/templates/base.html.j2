@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ chrome.theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ chrome.page_title }} — {{ chrome.title }}</title>
+  {% if chrome.page_description %}
+  <meta name="description" content="{{ chrome.page_description }}">
+  {% endif %}
+  {% if chrome.canonical %}
+  <link rel="canonical" href="{{ chrome.canonical|safe }}">
+  {% endif %}
+  <link rel="stylesheet" href="{{ chrome.asset_prefix|safe }}_static/styles.css">
+  <meta name="generator" content="openapi-forge generator-html-docs">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <header class="site-header">
+    <div class="site-header__title">
+      <a href="{{ chrome.home_href|safe }}" rel="home">{{ chrome.title }}</a>
+      <p class="site-header__version"><small>v{{ chrome.api_version }}</small></p>
+    </div>
+    <button
+      type="button"
+      class="theme-toggle"
+      data-theme-toggle
+      aria-pressed="false"
+      aria-label="Toggle colour theme">
+      <span aria-hidden="true">◐</span>
+    </button>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" aria-label="API navigation">
+      {% include "partials/_sidebar.html.j2" %}
+    </aside>
+
+    <main id="main-content">
+      {% include "partials/_breadcrumb.html.j2" %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <script src="{{ chrome.asset_prefix|safe }}_static/app.js" defer></script>
+</body>
+</html>

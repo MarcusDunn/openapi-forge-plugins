@@ -7,12 +7,17 @@ members = [
     "transformer-filter-operations",
     "generator-rust-tower",
     "generator-rust-clap",
+    "generator-html-docs",
 ]
 # The clap fixture's `out/` is a complete CLI crate (Cargo.toml + src/main.rs
 # emitted by `forge generate`). Without exclusion, cargo refuses to build it
 # because the file isn't listed in `members` and it isn't its own workspace.
+# The html-petstore fixture's `out/` is a generated static site (HTML/CSS/JS,
+# no `Cargo.toml`); excluded for symmetry and to keep `cargo metadata` walks
+# fast.
 exclude = [
     "fixtures/clap-petstore/out",
+    "fixtures/html-petstore/out",
 ]
 
 # Plugin crates ship as public OCI WASM components at

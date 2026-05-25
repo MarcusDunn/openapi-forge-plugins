@@ -1,0 +1,85 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="api-title">
+  <header>
+    <h1 id="api-title">{{ info.title }}</h1>
+    {% if info.summary %}<p class="lede">{{ info.summary }}</p>{% endif %}
+    <dl class="meta">
+      <dt>Version</dt><dd><code>{{ info.version }}</code></dd>
+      {% if info.license_name %}
+      <dt>License</dt>
+      <dd>
+        {% if info.license_url %}<a href="{{ info.license_url }}">{{ info.license_name }}</a>
+        {% else %}{{ info.license_name }}{% endif %}
+        {% if info.license_identifier %}<small>({{ info.license_identifier }})</small>{% endif %}
+      </dd>
+      {% endif %}
+      {% if info.terms_of_service %}<dt>Terms</dt><dd><a href="{{ info.terms_of_service }}">{{ info.terms_of_service }}</a></dd>{% endif %}
+      {% if info.contact_name or info.contact_email or info.contact_url %}
+      <dt>Contact</dt>
+      <dd>
+        <address>
+          {% if info.contact_name %}{{ info.contact_name }}{% endif %}
+          {% if info.contact_email %}<a href="mailto:{{ info.contact_email }}">{{ info.contact_email }}</a>{% endif %}
+          {% if info.contact_url %}<a href="{{ info.contact_url }}">{{ info.contact_url }}</a>{% endif %}
+        </address>
+      </dd>
+      {% endif %}
+    </dl>
+  </header>
+
+  {% if info.description_html %}
+  <section aria-labelledby="overview-heading">
+    <h2 id="overview-heading">Overview</h2>
+    {{ info.description_html|safe }}
+  </section>
+  {% endif %}
+
+  {% if servers %}
+  <section aria-labelledby="servers-heading">
+    <h2 id="servers-heading">Servers</h2>
+    <ul class="servers">
+      {% for s in servers %}
+      <li>
+        <code>{{ s.url }}</code>
+        {% if s.name %}<span class="server-name">{{ s.name }}</span>{% endif %}
+        {% if s.description_html %}<div class="server-desc">{{ s.description_html|safe }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if external_docs %}
+  <section aria-labelledby="external-docs-heading">
+    <h2 id="external-docs-heading">External documentation</h2>
+    <p><a href="{{ external_docs.url }}">{{ external_docs.description if external_docs.description else external_docs.url }}</a></p>
+  </section>
+  {% endif %}
+
+  {% macro render_tag_overview(tag) %}
+  <li data-tag="{{ tag.slug }}" data-tag-path="{{ tag.slug_path|safe }}">
+    <a href="{{ chrome.asset_prefix|safe }}tags/{{ tag.slug_path|safe }}/index.html">
+      {{ tag.name }}
+    </a>
+    {% if tag.summary %}<small>— {{ tag.summary }}</small>{% endif %}
+    <span class="op-count">({{ tag.total_op_count }} ops)</span>
+    {% if tag.children %}
+    <ul>
+      {% for child in tag.children %}
+        {{ render_tag_overview(child) }}
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </li>
+  {% endmacro %}
+  <section aria-labelledby="tags-heading">
+    <h2 id="tags-heading">Tags</h2>
+    <ul class="tag-overview">
+      {% for tag in chrome.nav.roots %}
+        {{ render_tag_overview(tag) }}
+      {% endfor %}
+    </ul>
+  </section>
+</article>
+{% endblock %}
