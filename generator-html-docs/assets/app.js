@@ -18,8 +18,12 @@
 
   // ---- state ----
 
+  // `serverUrl` of this sentinel means "use the user-supplied
+  // custom URL instead of any declared server".
+  var CUSTOM_SERVER = "__custom";
+
   function loadState() {
-    var s = { theme: null, serverUrl: null, variables: {} };
+    var s = { theme: null, serverUrl: null, customServerUrl: "", variables: {} };
     try {
       var raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
@@ -27,6 +31,7 @@
         if (parsed && typeof parsed === "object") {
           s.theme = parsed.theme || null;
           s.serverUrl = parsed.serverUrl || null;
+          s.customServerUrl = parsed.customServerUrl || "";
           s.variables = parsed.variables || {};
         }
       }
@@ -60,6 +65,9 @@
 
   function effectiveServerUrl() {
     if (!state.serverUrl) return null;
+    if (state.serverUrl === CUSTOM_SERVER) {
+      return (state.customServerUrl || "").trim() || null;
+    }
     var vars = state.variables[state.serverUrl] || {};
     return substitute(state.serverUrl, vars);
   }
@@ -70,6 +78,18 @@
     saveState(state);
     refreshHeaderEffective();
     emit("serverchange", { url: url, effective: effectiveServerUrl() });
+  }
+
+  function setCustomServerUrl(url) {
+    state.customServerUrl = url || "";
+    saveState(state);
+    if (state.serverUrl === CUSTOM_SERVER) {
+      refreshHeaderEffective();
+      emit("serverchange", {
+        url: CUSTOM_SERVER,
+        effective: effectiveServerUrl(),
+      });
+    }
   }
 
   function setVariable(serverUrl, name, value) {
@@ -114,6 +134,8 @@
   function initServerPicker() {
     var sel = document.querySelector("[data-server-picker]");
     if (!sel) return;
+    var customInput = document.querySelector("[data-server-custom-url]");
+
     // First page load — adopt the stored server, else the first option.
     var options = Array.prototype.map.call(sel.options, function (o) { return o.value; });
     if (state.serverUrl && options.indexOf(state.serverUrl) !== -1) {
@@ -122,9 +144,25 @@
       state.serverUrl = sel.value;
       saveState(state);
     }
+
+    function applyCustomVisibility() {
+      if (!customInput) return;
+      var isCustom = sel.value === CUSTOM_SERVER;
+      customInput.hidden = !isCustom;
+      if (isCustom) customInput.value = state.customServerUrl || "";
+    }
+    applyCustomVisibility();
+
     sel.addEventListener("change", function () {
       setServer(sel.value);
+      applyCustomVisibility();
+      if (sel.value === CUSTOM_SERVER && customInput) customInput.focus();
     });
+    if (customInput) {
+      customInput.addEventListener("input", function () {
+        setCustomServerUrl(customInput.value);
+      });
+    }
     refreshHeaderEffective();
   }
 
@@ -553,6 +591,7 @@
     effectiveServerUrl: effectiveServerUrl,
     setServer: setServer,
     setVariable: setVariable,
+    setCustomServerUrl: setCustomServerUrl,
     on: function (name, cb) {
       if (!listeners[name]) listeners[name] = [];
       listeners[name].push(cb);

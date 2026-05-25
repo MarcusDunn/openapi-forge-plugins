@@ -21,22 +21,28 @@
       <p class="site-header__version"><small>v{{ chrome.api_version }}</small></p>
     </div>
     <div class="site-header__tools">
-      {% if chrome.pickable_servers %}
       <label class="server-picker-label" for="server-picker">
         Server:
         <select id="server-picker" data-server-picker>
           {% for s in chrome.pickable_servers %}
           <option value="{{ s.url }}">{{ s.label }}</option>
           {% endfor %}
+          <option value="__custom" data-custom-option>Custom…</option>
         </select>
       </label>
+      <input
+        type="url"
+        class="server-picker-custom"
+        data-server-custom-url
+        placeholder="https://api.example.com"
+        autocomplete="url"
+        hidden>
       <output
         class="server-picker-effective"
         data-server-effective
         for="server-picker"
         aria-live="polite"
         title="Effective URL after variable substitution"></output>
-      {% endif %}
       <button
         type="button"
         class="theme-toggle"

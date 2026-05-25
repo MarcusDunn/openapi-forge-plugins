@@ -159,6 +159,17 @@ a:hover { text-decoration: underline; }
   font-size: 0.9em;
   max-width: 40ch;
 }
+.server-picker-custom {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  min-width: 24ch;
+}
+.server-picker-custom[hidden] { display: none; }
 .server-picker-effective {
   font-family: var(--font-mono);
   font-size: 0.85em;

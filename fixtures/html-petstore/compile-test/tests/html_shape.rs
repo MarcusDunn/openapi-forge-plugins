@@ -700,6 +700,19 @@ fn server_variable_forms_are_editable_on_landing() {
 }
 
 #[test]
+fn server_picker_always_offers_custom_entry() {
+    let html = read("index.html");
+    assert!(
+        html.contains("value=\"__custom\""),
+        "picker should always include a Custom… option so callers can target an undeclared host"
+    );
+    assert!(
+        html.contains("data-server-custom-url"),
+        "header should ship an editable URL input that the Custom option reveals"
+    );
+}
+
+#[test]
 fn header_effective_url_slot_is_present_for_aria_live() {
     let html = read("index.html");
     assert!(
