@@ -26,6 +26,20 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
         Err(e) => return rejection("index.html", e, diagnostics),
     }
 
+    if !spec.security_schemes.is_empty() {
+        match render::security_page(&env, spec, cfg, &nav) {
+            Ok(page) => files.push(OutputFile::text(page.path, page.html)),
+            Err(e) => return rejection("security/index.html", e, diagnostics),
+        }
+    }
+
+    if cfg.include_schemas {
+        match render::schemas_index_page(&env, spec, cfg, &nav) {
+            Ok(page) => files.push(OutputFile::text(page.path, page.html)),
+            Err(e) => return rejection("schemas/index.html", e, diagnostics),
+        }
+    }
+
     for tag in nav.walk() {
         match render::tag_page(&env, spec, cfg, &nav, tag) {
             Ok(page) => files.push(OutputFile::text(page.path, page.html)),

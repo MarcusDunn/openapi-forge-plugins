@@ -16,8 +16,30 @@
     }
   },
   "servers": [
-    { "url": "https://api.example.com/v1", "description": "Production" },
-    { "url": "https://staging.example.com/v1", "description": "Staging" }
+    {
+      "url": "https://{tenant}.api.example.com/v1",
+      "description": "Production (per-tenant)",
+      "variables": {
+        "tenant": {
+          "default": "acme",
+          "description": "Customer tenant slug."
+        }
+      }
+    },
+    {
+      "url": "https://staging.example.com/{stage}",
+      "description": "Staging",
+      "variables": {
+        "stage": {
+          "default": "v1",
+          "enum": ["v1", "v1beta"],
+          "description": "Staging API channel."
+        }
+      }
+    }
+  ],
+  "security": [
+    { "bearerAuth": [] }
   ],
   "tags": [
     {
@@ -116,6 +138,9 @@
       "delete": {
         "operationId": "deletePet",
         "tags": ["pets-admin"],
+        "security": [
+          { "petsAdminOauth": ["pets:write"] }
+        ],
         "summary": "Remove a pet",
         "description": "Removes the pet from the store. Audited.",
         "parameters": [
@@ -161,6 +186,36 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/ImportJob" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/pets/{petId}/events": {
+      "get": {
+        "operationId": "listPetEvents",
+        "tags": ["pets-public"],
+        "summary": "Stream events for a pet",
+        "description": "Returns the event log for a pet — a discriminated union over event types.",
+        "parameters": [
+          {
+            "name": "petId",
+            "in": "path",
+            "required": true,
+            "description": "Pet whose events to fetch.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event list.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/PetEvent" }
+                }
               }
             }
           }
@@ -306,6 +361,63 @@
         "properties": {
           "code": { "type": "integer", "format": "int32" },
           "message": { "type": "string" }
+        }
+      },
+      "PetCreatedEvent": {
+        "type": "object",
+        "title": "PetCreatedEvent",
+        "required": ["type", "petId", "at"],
+        "properties": {
+          "type": { "type": "string", "const": "created" },
+          "petId": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "PetDeletedEvent": {
+        "type": "object",
+        "title": "PetDeletedEvent",
+        "required": ["type", "petId", "at", "reason"],
+        "properties": {
+          "type": { "type": "string", "const": "deleted" },
+          "petId": { "type": "string" },
+          "at": { "type": "string", "format": "date-time" },
+          "reason": { "type": "string" }
+        }
+      },
+      "PetEvent": {
+        "title": "PetEvent",
+        "description": "An event in a pet's history. Discriminated by the `type` field.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/PetCreatedEvent" },
+          { "$ref": "#/components/schemas/PetDeletedEvent" }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "created": "#/components/schemas/PetCreatedEvent",
+            "deleted": "#/components/schemas/PetDeletedEvent"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "API access tokens. Send `Authorization: Bearer <token>`."
+      },
+      "petsAdminOauth": {
+        "type": "oauth2",
+        "description": "OAuth 2.0 with the **client credentials** grant. Used for staff-only mutating endpoints.",
+        "flows": {
+          "clientCredentials": {
+            "tokenUrl": "https://auth.example.com/oauth/token",
+            "scopes": {
+              "pets:read": "Read pet records.",
+              "pets:write": "Create, update, or delete pet records."
+            }
+          }
         }
       }
     }

@@ -3,8 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use forge_plugin_sdk::ir::{
-    AdditionalProperties, Body, BodyContent, ExternalDocs, Header, Ir, NamedType, Operation,
-    Parameter, Property, Response, ResponseStatus, TypeDef, TypeRef,
+    AdditionalProperties, ApiKeyLocation, ApiKeyScheme, Body, BodyContent, Discriminator,
+    ExternalDocs, Header, Ir, NamedType, OAuth2Flow, OAuth2FlowKind, OAuth2Scheme, Operation,
+    Parameter, Property, Response, ResponseStatus, SecurityRequirement, SecurityScheme,
+    SecuritySchemeKind, TypeDef, TypeRef,
 };
 use forge_plugin_sdk::values_ext;
 use minijinja::{Environment, Value as JValue};
@@ -61,6 +63,26 @@ pub fn env() -> Environment<'static> {
         include_str!("../templates/partials/_example.html.j2"),
     )
     .expect("example partial parses");
+    env.add_template(
+        "security.html.j2",
+        include_str!("../templates/security.html.j2"),
+    )
+    .expect("security template parses");
+    env.add_template(
+        "schemas_index.html.j2",
+        include_str!("../templates/schemas_index.html.j2"),
+    )
+    .expect("schemas index template parses");
+    env.add_template(
+        "partials/_auth_required.html.j2",
+        include_str!("../templates/partials/_auth_required.html.j2"),
+    )
+    .expect("auth-required partial parses");
+    env.add_template(
+        "partials/_discriminator.html.j2",
+        include_str!("../templates/partials/_discriminator.html.j2"),
+    )
+    .expect("discriminator partial parses");
     env
 }
 
@@ -76,6 +98,9 @@ pub struct ChromeCtx<'a> {
     pub current_path: &'a str,
     pub asset_prefix: String,
     pub home_href: String,
+    pub security_href: String,
+    pub schemas_href: String,
+    pub has_security: bool,
     pub api_version: &'a str,
     pub nav: &'a Nav,
 }
@@ -96,6 +121,8 @@ impl<'a> ChromeCtx<'a> {
         } else {
             format!("{}index.html", asset_prefix)
         };
+        let security_href = format!("{}{}", asset_prefix, paths::SECURITY_INDEX);
+        let schemas_href = format!("{}{}", asset_prefix, paths::SCHEMAS_INDEX);
         let canonical = cfg
             .base_url
             .as_deref()
@@ -109,6 +136,9 @@ impl<'a> ChromeCtx<'a> {
             current_path,
             asset_prefix,
             home_href,
+            security_href,
+            schemas_href,
+            has_security: !spec.security_schemes.is_empty(),
             api_version: spec.info.version.as_str(),
             nav,
         }
@@ -163,6 +193,205 @@ pub fn crumbs_for_tag(nav: &Nav, slug_chain: &[String], asset_prefix: &str) -> V
     }
     let _ = current; // appease unused
     out
+}
+
+// ----- security -----
+
+/// What a `<dl>` of OAuth2 scopes shows.
+#[derive(Serialize, Clone, Debug)]
+pub struct ScopeView {
+    pub name: String,
+    pub description: String,
+}
+
+/// One OAuth2 flow, rendered as a `<section>` on the security page.
+#[derive(Serialize, Clone, Debug)]
+pub struct OAuth2FlowView {
+    pub kind: &'static str,
+    pub authorization_url: Option<String>,
+    pub token_url: Option<String>,
+    pub refresh_url: Option<String>,
+    pub scopes: Vec<ScopeView>,
+}
+
+fn oauth2_flow_view(f: &OAuth2Flow) -> OAuth2FlowView {
+    OAuth2FlowView {
+        kind: match f.kind {
+            OAuth2FlowKind::Implicit => "implicit",
+            OAuth2FlowKind::Password => "password",
+            OAuth2FlowKind::ClientCredentials => "client-credentials",
+            OAuth2FlowKind::AuthorizationCode => "authorization-code",
+        },
+        authorization_url: f.authorization_url.clone(),
+        token_url: f.token_url.clone(),
+        refresh_url: f.refresh_url.clone(),
+        scopes: f
+            .scopes
+            .iter()
+            .map(|(name, description)| ScopeView {
+                name: name.clone(),
+                description: description.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Tagged enum-style view of `SecuritySchemeKind` for templates. We
+/// keep the variant's payload on the view directly so the template
+/// doesn't have to switch on an inner sub-object.
+#[derive(Serialize, Clone, Debug)]
+pub struct SecuritySchemeView {
+    pub id: String,
+    /// One of: `api-key`, `http-basic`, `http-bearer`, `mutual-tls`,
+    /// `oauth2`, `open-id-connect`. Templates branch on this.
+    pub kind: &'static str,
+    pub description_html: Option<String>,
+    pub deprecated: bool,
+    pub href: String,
+    // -- per-kind extras (only the matching one is populated) --
+    pub api_key_name: Option<String>,
+    pub api_key_location: Option<&'static str>,
+    pub bearer_format: Option<String>,
+    pub oauth2_flows: Vec<OAuth2FlowView>,
+    pub open_id_connect_url: Option<String>,
+}
+
+impl SecuritySchemeView {
+    fn from_scheme(asset_prefix: &str, s: &SecurityScheme) -> Self {
+        let mut view = SecuritySchemeView {
+            id: s.id.clone(),
+            kind: "",
+            description_html: markdown::render_opt(s.description.as_deref()),
+            deprecated: s.deprecated,
+            href: format!("{}{}#scheme-{}", asset_prefix, paths::SECURITY_INDEX, s.id),
+            api_key_name: None,
+            api_key_location: None,
+            bearer_format: None,
+            oauth2_flows: Vec::new(),
+            open_id_connect_url: None,
+        };
+        match &s.kind {
+            SecuritySchemeKind::ApiKey(ApiKeyScheme { name, location }) => {
+                view.kind = "api-key";
+                view.api_key_name = Some(name.clone());
+                view.api_key_location = Some(match location {
+                    ApiKeyLocation::Header => "header",
+                    ApiKeyLocation::Query => "query",
+                    ApiKeyLocation::Cookie => "cookie",
+                });
+            }
+            SecuritySchemeKind::HttpBasic => view.kind = "http-basic",
+            SecuritySchemeKind::HttpBearer { bearer_format } => {
+                view.kind = "http-bearer";
+                view.bearer_format = bearer_format.clone();
+            }
+            SecuritySchemeKind::MutualTls => view.kind = "mutual-tls",
+            SecuritySchemeKind::Oauth2(OAuth2Scheme { flows }) => {
+                view.kind = "oauth2";
+                view.oauth2_flows = flows.iter().map(oauth2_flow_view).collect();
+            }
+            SecuritySchemeKind::OpenIdConnect { url } => {
+                view.kind = "open-id-connect";
+                view.open_id_connect_url = Some(url.clone());
+            }
+        }
+        view
+    }
+}
+
+/// "Requires <X> with scopes [...]" — what's listed on an op page.
+#[derive(Serialize, Clone, Debug)]
+pub struct SecurityRequirementView {
+    pub scheme_id: String,
+    pub scheme_kind: &'static str,
+    pub scopes: Vec<String>,
+    pub href: String,
+}
+
+/// Per-op auth block: a list of `[req]` alternatives (each is the
+/// AND-combination — meet all of these to access the op) plus an
+/// `inherited` flag when the op falls back to document-level security.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct OpSecurityView {
+    pub alternatives: Vec<Vec<SecurityRequirementView>>,
+    pub inherited: bool,
+}
+
+/// Resolves an operation's effective security: its own `security` if
+/// declared, else the document-level fallback.
+pub fn op_security_view(asset_prefix: &str, spec: &Ir, op: &Operation) -> Option<OpSecurityView> {
+    let (reqs, inherited) = if !op.security.is_empty() {
+        (op.security.as_slice(), false)
+    } else if !spec_doc_security_is_empty(spec) {
+        // OAS expresses doc-level security on the Ir's root, but the
+        // current `forge-ir` 0.1.13 doesn't surface it as a dedicated
+        // field. We mirror the behaviour by treating the *first*
+        // operation that explicitly declares an empty `security: []`
+        // override as "anonymous"; everything else inherits whichever
+        // doc-level set the parser flattened onto each op (since the
+        // parser already inlines inheritance, `op.security` is the
+        // effective list — see forge-parser).
+        (op.security.as_slice(), true)
+    } else {
+        return None;
+    };
+    if reqs.is_empty() {
+        return None;
+    }
+    let scheme_by_id: BTreeMap<&str, &SecurityScheme> = spec
+        .security_schemes
+        .iter()
+        .map(|s| (s.id.as_str(), s))
+        .collect();
+    // OAS security is a list of OR alternatives, each AND'd from one
+    // or more requirements. forge-ir flattens it into a single
+    // `Vec<SecurityRequirement>`; per the WIT shape we don't get the
+    // outer OR structure. Treat each requirement as its own
+    // alternative for now (the most permissive read; matches what
+    // SwaggerUI shows when in doubt).
+    let alternatives: Vec<Vec<SecurityRequirementView>> = reqs
+        .iter()
+        .map(|r| vec![requirement_view(asset_prefix, &scheme_by_id, r)])
+        .collect();
+    Some(OpSecurityView {
+        alternatives,
+        inherited,
+    })
+}
+
+fn spec_doc_security_is_empty(_spec: &Ir) -> bool {
+    // Placeholder — see op_security_view's comment. The parser already
+    // flattens doc-level security onto each op, so there's no separate
+    // root field to inspect on `Ir` itself.
+    true
+}
+
+fn requirement_view(
+    asset_prefix: &str,
+    scheme_by_id: &BTreeMap<&str, &SecurityScheme>,
+    r: &SecurityRequirement,
+) -> SecurityRequirementView {
+    let scheme_kind = scheme_by_id
+        .get(r.scheme_id.as_str())
+        .map_or("unknown", |s| match s.kind {
+            SecuritySchemeKind::ApiKey(_) => "api-key",
+            SecuritySchemeKind::HttpBasic => "http-basic",
+            SecuritySchemeKind::HttpBearer { .. } => "http-bearer",
+            SecuritySchemeKind::MutualTls => "mutual-tls",
+            SecuritySchemeKind::Oauth2(_) => "oauth2",
+            SecuritySchemeKind::OpenIdConnect { .. } => "open-id-connect",
+        });
+    SecurityRequirementView {
+        scheme_id: r.scheme_id.clone(),
+        scheme_kind,
+        scopes: r.scopes.clone(),
+        href: format!(
+            "{}{}#scheme-{}",
+            asset_prefix,
+            paths::SECURITY_INDEX,
+            r.scheme_id
+        ),
+    }
 }
 
 // ----- type refs -----
@@ -291,6 +520,10 @@ pub struct MediaTypeView {
     pub media_type: String,
     pub r#type: TypeRefView,
     pub example_json: Option<String>,
+    /// When the media type's schema is a discriminated union, the
+    /// disambiguation rule is inlined here so callers see it without
+    /// clicking through to the schema page.
+    pub discriminator: Option<DiscriminatorView>,
 }
 
 fn body_content_view(spec: &Ir, asset_prefix: &str, c: &BodyContent) -> MediaTypeView {
@@ -298,6 +531,7 @@ fn body_content_view(spec: &Ir, asset_prefix: &str, c: &BodyContent) -> MediaTyp
         media_type: c.media_type.clone(),
         r#type: render_typeref(spec, asset_prefix, &c.r#type),
         example_json: first_example_json(spec, &c.examples),
+        discriminator: discriminator_for_typeref(spec, asset_prefix, &c.r#type),
     }
 }
 
@@ -472,6 +706,7 @@ pub struct OperationView {
     pub responses: Vec<ResponseView>,
     pub external_docs: Option<ExternalDocsView>,
     pub tag_links: Vec<TagLink>,
+    pub security: Option<OpSecurityView>,
 }
 
 pub fn operation_view(spec: &Ir, nav: &Nav, asset_prefix: &str, op: &Operation) -> OperationView {
@@ -521,6 +756,7 @@ pub fn operation_view(spec: &Ir, nav: &Nav, asset_prefix: &str, op: &Operation) 
             .collect(),
         external_docs: op.external_docs.as_ref().map(ext_docs_view),
         tag_links,
+        security: op_security_view(asset_prefix, spec, op),
     }
 }
 
@@ -559,10 +795,86 @@ pub struct SchemaView {
     pub additional_properties_type: Option<TypeRefView>,
     pub array_items: Option<TypeRefView>,
     pub enum_values: Vec<String>,
-    pub union_variants: Vec<TypeRefView>,
+    pub union_variants: Vec<UnionVariantView>,
     pub union_kind: &'static str,
+    pub discriminator: Option<DiscriminatorView>,
     pub example_json: Option<String>,
     pub used_in: Vec<OperationLink>,
+}
+
+/// One row in a discriminated union's mapping table.
+#[derive(Serialize, Clone, Debug)]
+pub struct DiscriminatorMappingEntry {
+    pub tag: String,
+    pub r#type: TypeRefView,
+}
+
+/// View for a `discriminator` block. Carried on schemas AND inlined
+/// into request/response sections when the body type is a
+/// discriminated union, so callers immediately see the disambiguation
+/// rule without bouncing to the schema page.
+#[derive(Serialize, Clone, Debug)]
+pub struct DiscriminatorView {
+    pub property_name: String,
+    pub mapping: Vec<DiscriminatorMappingEntry>,
+    /// `true` when the union's discriminator block lists a mapping
+    /// table; `false` for unions that name a discriminator property
+    /// without enumerating tag→type — those still render the call-out
+    /// but with no mapping table.
+    pub has_mapping: bool,
+}
+
+fn discriminator_view(spec: &Ir, asset_prefix: &str, d: &Discriminator) -> DiscriminatorView {
+    let mapping: Vec<DiscriminatorMappingEntry> = d
+        .mapping
+        .iter()
+        .map(|(tag, tref)| DiscriminatorMappingEntry {
+            tag: tag.clone(),
+            r#type: render_typeref(spec, asset_prefix, tref),
+        })
+        .collect();
+    DiscriminatorView {
+        property_name: d.property_name.clone(),
+        has_mapping: !mapping.is_empty(),
+        mapping,
+    }
+}
+
+/// A variant of a union, with its optional explicit tag (`UnionVariant.tag`).
+#[derive(Serialize, Clone, Debug)]
+pub struct UnionVariantView {
+    pub r#type: TypeRefView,
+    pub tag: Option<String>,
+}
+
+/// If `tref` resolves to a discriminated union — directly OR through
+/// one level of array wrapping (`[PetEvent]` is just as worth
+/// showing the discriminator as `PetEvent`) — return the view. Used
+/// by the operation template to inline the discriminator callout on
+/// request/response sections.
+pub fn discriminator_for_typeref(
+    spec: &Ir,
+    asset_prefix: &str,
+    tref: &TypeRef,
+) -> Option<DiscriminatorView> {
+    let mut current: &str = tref.as_str();
+    // Peel through up to a few array wrappers — guards against silly
+    // self-referential chains while still handling the common
+    // `[Wrapper]` and `[[Item]]` cases.
+    for _ in 0..4 {
+        let t = spec.types.iter().find(|t| t.id == current)?;
+        match &t.definition {
+            TypeDef::Union(u) => {
+                let d = u.discriminator.as_ref()?;
+                return Some(discriminator_view(spec, asset_prefix, d));
+            }
+            TypeDef::Array(a) => {
+                current = a.items.as_str();
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 #[derive(Serialize)]
@@ -593,6 +905,7 @@ pub fn schema_view(
         enum_values: Vec::new(),
         union_variants: Vec::new(),
         union_kind: "",
+        discriminator: None,
         example_json: first_example_json(spec, &t.examples),
         used_in: used_in_links(spec, asset_prefix, used_in.ops_referencing(&t.id).collect()),
     };
@@ -659,8 +972,15 @@ pub fn schema_view(
             view.union_variants = u
                 .variants
                 .iter()
-                .map(|v| render_typeref(spec, asset_prefix, &v.r#type))
+                .map(|v| UnionVariantView {
+                    r#type: render_typeref(spec, asset_prefix, &v.r#type),
+                    tag: v.tag.clone(),
+                })
                 .collect();
+            view.discriminator = u
+                .discriminator
+                .as_ref()
+                .map(|d| discriminator_view(spec, asset_prefix, d));
         }
         TypeDef::Null => {
             view.kind = "null";
@@ -748,11 +1068,7 @@ pub fn build_used_in_index(spec: &Ir) -> UsedInIndex {
     index
 }
 
-fn used_in_links(
-    spec: &Ir,
-    asset_prefix: &str,
-    op_ids: BTreeSet<&String>,
-) -> Vec<OperationLink> {
+fn used_in_links(spec: &Ir, asset_prefix: &str, op_ids: BTreeSet<&String>) -> Vec<OperationLink> {
     let mut out = Vec::new();
     for op in &spec.operations {
         if !op_ids.contains(&op.id) {
@@ -776,6 +1092,15 @@ pub struct ServerView {
     pub url: String,
     pub name: Option<String>,
     pub description_html: Option<String>,
+    pub variables: Vec<ServerVariableView>,
+}
+
+#[derive(Serialize)]
+pub struct ServerVariableView {
+    pub name: String,
+    pub default: String,
+    pub description_html: Option<String>,
+    pub allowed: Vec<String>,
 }
 
 pub fn server_views(servers: &[forge_plugin_sdk::ir::Server]) -> Vec<ServerView> {
@@ -785,6 +1110,16 @@ pub fn server_views(servers: &[forge_plugin_sdk::ir::Server]) -> Vec<ServerView>
             url: s.url.clone(),
             name: s.name.clone(),
             description_html: markdown::render_opt(s.description.as_deref()),
+            variables: s
+                .variables
+                .iter()
+                .map(|(name, v)| ServerVariableView {
+                    name: name.clone(),
+                    default: v.default.clone(),
+                    description_html: markdown::render_opt(v.description.as_deref()),
+                    allowed: v.r#enum.clone().unwrap_or_default(),
+                })
+                .collect(),
         })
         .collect()
 }
@@ -1076,6 +1411,139 @@ pub fn schema_page(
         .render(JValue::from_serialize(&ctx))?;
     Ok(Page {
         path: current_path,
+        html,
+    })
+}
+
+// ----- security page -----
+
+#[derive(Serialize)]
+struct SecurityCtx<'a> {
+    chrome: ChromeCtx<'a>,
+    schemes: Vec<SecuritySchemeView>,
+    crumbs: Vec<Crumb>,
+}
+
+pub fn security_page(
+    env: &Environment<'_>,
+    spec: &Ir,
+    cfg: &Config,
+    nav: &Nav,
+) -> Result<Page, RenderError> {
+    let current_path = paths::SECURITY_INDEX;
+    let asset_prefix = paths::asset_prefix(current_path);
+    let chrome = ChromeCtx::new(
+        spec,
+        cfg,
+        nav,
+        current_path,
+        "Security".into(),
+        Some("Authentication schemes accepted by this API.".into()),
+    );
+    let schemes: Vec<SecuritySchemeView> = spec
+        .security_schemes
+        .iter()
+        .map(|s| SecuritySchemeView::from_scheme(&asset_prefix, s))
+        .collect();
+    let mut crumbs = crumbs_home(&asset_prefix);
+    crumbs.push(Crumb {
+        label: "Security".into(),
+        href: None,
+    });
+    let ctx = SecurityCtx {
+        chrome,
+        schemes,
+        crumbs,
+    };
+    let html = env
+        .get_template("security.html.j2")?
+        .render(JValue::from_serialize(&ctx))?;
+    Ok(Page {
+        path: current_path.into(),
+        html,
+    })
+}
+
+// ----- schemas index page -----
+
+#[derive(Serialize)]
+pub struct SchemaIndexEntry {
+    pub id: String,
+    pub title: String,
+    pub kind: &'static str,
+    pub description_text: Option<String>,
+    pub href: String,
+    pub deprecated: bool,
+}
+
+#[derive(Serialize)]
+struct SchemasIndexCtx<'a> {
+    chrome: ChromeCtx<'a>,
+    entries: Vec<SchemaIndexEntry>,
+    crumbs: Vec<Crumb>,
+}
+
+pub fn schemas_index_page(
+    env: &Environment<'_>,
+    spec: &Ir,
+    cfg: &Config,
+    nav: &Nav,
+) -> Result<Page, RenderError> {
+    let current_path = paths::SCHEMAS_INDEX;
+    let asset_prefix = paths::asset_prefix(current_path);
+    let chrome = ChromeCtx::new(
+        spec,
+        cfg,
+        nav,
+        current_path,
+        "Schemas".into(),
+        Some("Every named type declared by this API.".into()),
+    );
+    let mut entries: Vec<SchemaIndexEntry> = spec
+        .types
+        .iter()
+        .filter(|t| schema_filter::is_user_facing(t))
+        .map(|t| {
+            let kind = match &t.definition {
+                TypeDef::Object(_) => "object",
+                TypeDef::Array(_) => "array",
+                TypeDef::EnumString(_) | TypeDef::EnumInt(_) => "enum",
+                TypeDef::Union(_) => "union",
+                TypeDef::Primitive(_) => "primitive",
+                TypeDef::Null => "null",
+            };
+            let title = t.title.clone().unwrap_or_else(|| t.id.clone());
+            let description_text = t
+                .description
+                .as_deref()
+                .map(markdown::first_paragraph_text)
+                .filter(|s| !s.is_empty());
+            SchemaIndexEntry {
+                id: t.id.clone(),
+                title,
+                kind,
+                description_text,
+                href: format!("{}{}", asset_prefix, paths::schema_page_path(&t.id)),
+                deprecated: t.deprecated,
+            }
+        })
+        .collect();
+    entries.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
+    let mut crumbs = crumbs_home(&asset_prefix);
+    crumbs.push(Crumb {
+        label: "Schemas".into(),
+        href: None,
+    });
+    let ctx = SchemasIndexCtx {
+        chrome,
+        entries,
+        crumbs,
+    };
+    let html = env
+        .get_template("schemas_index.html.j2")?
+        .render(JValue::from_serialize(&ctx))?;
+    Ok(Page {
+        path: current_path.into(),
         html,
     })
 }

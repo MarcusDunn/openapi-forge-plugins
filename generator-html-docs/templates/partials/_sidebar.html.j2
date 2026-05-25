@@ -19,6 +19,15 @@
     {% endif %}
   </li>
 {% endmacro %}
+<nav aria-label="API sections" class="nav-sections">
+  <ul>
+    <li><a href="{{ chrome.home_href|safe }}"{% if chrome.current_path == "index.html" %} aria-current="page"{% endif %}>Overview</a></li>
+    {% if chrome.has_security %}
+    <li><a href="{{ chrome.security_href|safe }}"{% if chrome.current_path == "security/index.html" %} aria-current="page"{% endif %}>Security</a></li>
+    {% endif %}
+    <li><a href="{{ chrome.schemas_href|safe }}"{% if chrome.current_path == "schemas/index.html" %} aria-current="page"{% endif %}>Schemas</a></li>
+  </ul>
+</nav>
 <nav aria-label="API tags">
   <ul class="nav-tree" role="tree">
     {% for tag in chrome.nav.roots %}

@@ -1,0 +1,29 @@
+{% if security %}
+<section aria-labelledby="auth-heading" class="op-auth" data-auth-required>
+  <h2 id="auth-heading">Authorization{% if security.inherited %} <small>(inherited from API default)</small>{% endif %}</h2>
+  {% if security.alternatives|length > 1 %}
+  <p><small>Any one of the following requirement sets is sufficient:</small></p>
+  {% endif %}
+  <ol class="auth-alternatives">
+    {% for alt in security.alternatives %}
+    <li>
+      <ul class="auth-and">
+        {% for req in alt %}
+        <li data-scheme-id="{{ req.scheme_id }}" data-scheme-kind="{{ req.scheme_kind }}">
+          <a href="{{ req.href|safe }}">
+            <code>{{ req.scheme_id }}</code>
+          </a>
+          <small>({{ req.scheme_kind }})</small>
+          {% if req.scopes %}
+          <span class="auth-scopes">scopes:
+            {% for s in req.scopes %}<code>{{ s }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+          </span>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endif %}

@@ -40,10 +40,24 @@
     <h2 id="servers-heading">Servers</h2>
     <ul class="servers">
       {% for s in servers %}
-      <li>
+      <li data-server-url="{{ s.url }}">
         <code>{{ s.url }}</code>
         {% if s.name %}<span class="server-name">{{ s.name }}</span>{% endif %}
         {% if s.description_html %}<div class="server-desc">{{ s.description_html|safe }}</div>{% endif %}
+        {% if s.variables %}
+        <dl class="server-variables">
+          {% for v in s.variables %}
+          <dt><code>{{ v.name }}</code></dt>
+          <dd>
+            default <code>{{ v.default }}</code>
+            {% if v.allowed %}
+            — allowed: {% for a in v.allowed %}<code>{{ a }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+            {% endif %}
+            {% if v.description_html %}{{ v.description_html|safe }}{% endif %}
+          </dd>
+          {% endfor %}
+        </dl>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>

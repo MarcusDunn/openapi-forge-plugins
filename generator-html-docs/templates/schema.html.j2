@@ -63,9 +63,14 @@
   {% elif schema.kind == "union" %}
   <section aria-labelledby="variants-heading">
     <h2 id="variants-heading">Variants <small>({{ schema.union_kind }})</small></h2>
+    {% set discriminator = schema.discriminator %}
+    {% include "partials/_discriminator.html.j2" %}
     <ul class="union-variants">
       {% for v in schema.union_variants %}
-      <li>{% set t = v %}{% include "partials/_typeref.html.j2" %}</li>
+      <li>
+        {% set t = v.type %}{% include "partials/_typeref.html.j2" %}
+        {% if v.tag %}<small>tag: <code>{{ v.tag }}</code></small>{% endif %}
+      </li>
       {% endfor %}
     </ul>
   </section>

@@ -1,0 +1,64 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="security-title">
+  <header>
+    <h1 id="security-title">Security</h1>
+    <p class="lede">Authentication schemes accepted by this API. Each operation lists the scheme(s) it requires; this page lists every scheme the spec declares.</p>
+  </header>
+
+  {% if schemes %}
+  {% for scheme in schemes %}
+  <section id="scheme-{{ scheme.id }}" aria-labelledby="scheme-{{ scheme.id }}-heading" data-scheme-id="{{ scheme.id }}" data-scheme-kind="{{ scheme.kind }}">
+    <h2 id="scheme-{{ scheme.id }}-heading">
+      <code>{{ scheme.id }}</code>
+      <small>({{ scheme.kind }})</small>
+      {% if scheme.deprecated %}<small class="badge-deprecated">deprecated</small>{% endif %}
+    </h2>
+    {% if scheme.description_html %}{{ scheme.description_html|safe }}{% endif %}
+
+    {% if scheme.kind == "api-key" %}
+    <dl class="scheme-detail">
+      <dt>Header / param name</dt>
+      <dd><code>{{ scheme.api_key_name }}</code></dd>
+      <dt>Location</dt>
+      <dd><code>{{ scheme.api_key_location }}</code></dd>
+    </dl>
+    {% elif scheme.kind == "http-basic" %}
+    <p>HTTP Basic authentication. Send <code>Authorization: Basic &lt;base64(user:pass)&gt;</code>.</p>
+    {% elif scheme.kind == "http-bearer" %}
+    <p>HTTP Bearer authentication. Send <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+    {% if scheme.bearer_format %}<p><small>Token format: <code>{{ scheme.bearer_format }}</code></small></p>{% endif %}
+    {% elif scheme.kind == "mutual-tls" %}
+    <p>Mutual TLS. Provide a client certificate during the TLS handshake.</p>
+    {% elif scheme.kind == "oauth2" %}
+    {% if scheme.oauth2_flows %}
+    {% for flow in scheme.oauth2_flows %}
+    <section aria-labelledby="scheme-{{ scheme.id }}-flow-{{ flow.kind }}" data-flow="{{ flow.kind }}">
+      <h3 id="scheme-{{ scheme.id }}-flow-{{ flow.kind }}">OAuth 2.0 — <code>{{ flow.kind }}</code> flow</h3>
+      <dl class="scheme-detail">
+        {% if flow.authorization_url %}<dt>Authorization URL</dt><dd><a href="{{ flow.authorization_url }}"><code>{{ flow.authorization_url }}</code></a></dd>{% endif %}
+        {% if flow.token_url %}<dt>Token URL</dt><dd><a href="{{ flow.token_url }}"><code>{{ flow.token_url }}</code></a></dd>{% endif %}
+        {% if flow.refresh_url %}<dt>Refresh URL</dt><dd><a href="{{ flow.refresh_url }}"><code>{{ flow.refresh_url }}</code></a></dd>{% endif %}
+      </dl>
+      {% if flow.scopes %}
+      <h4>Scopes</h4>
+      <dl class="scopes">
+        {% for scope in flow.scopes %}
+        <dt><code>{{ scope.name }}</code></dt>
+        <dd>{{ scope.description }}</dd>
+        {% endfor %}
+      </dl>
+      {% endif %}
+    </section>
+    {% endfor %}
+    {% endif %}
+    {% elif scheme.kind == "open-id-connect" %}
+    <p>OpenID Connect. Discovery document: <a href="{{ scheme.open_id_connect_url }}"><code>{{ scheme.open_id_connect_url }}</code></a></p>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% else %}
+  <p><em>This API declares no security schemes.</em></p>
+  {% endif %}
+</article>
+{% endblock %}

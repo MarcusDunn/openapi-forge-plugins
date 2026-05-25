@@ -42,9 +42,21 @@ const OPERATIONS: &[&str] = &[
     "legacySearchPets",
     "listOwners",
     "getOwner",
+    "listPetEvents",
 ];
 
 const DEPRECATED_OP: &str = "legacySearchPets";
+
+/// The op whose `security` overrides the document-level default.
+const OP_WITH_AUTH_OVERRIDE: &str = "deletePet";
+
+/// An op that inherits the document-level `bearerAuth` requirement.
+const OP_WITH_INHERITED_AUTH: &str = "listPets";
+
+const SECURITY_SCHEMES: &[&str] = &["bearerAuth", "petsAdminOauth"];
+
+const UNION_SCHEMA: &str = "PetEvent";
+const UNION_DISCRIMINATOR_PROPERTY: &str = "type";
 
 const TAGS_FLAT: &[(&str, &str)] = &[
     // (slug path under tags/, tag name as it appears in the spec)
@@ -54,7 +66,16 @@ const TAGS_FLAT: &[(&str, &str)] = &[
     ("owners", "owners"),
 ];
 
-const SCHEMAS: &[&str] = &["Pet", "Pets", "Owner", "ImportJob", "Error"];
+const SCHEMAS: &[&str] = &[
+    "Pet",
+    "Pets",
+    "Owner",
+    "ImportJob",
+    "Error",
+    "PetEvent",
+    "PetCreatedEvent",
+    "PetDeletedEvent",
+];
 
 // ---------- file-tree existence ----------
 
@@ -340,6 +361,165 @@ fn schema_back_links_present() {
             "Pet schema 'Used in' should link to {op}"
         );
     }
+}
+
+// ---------- M1: security ----------
+
+#[test]
+fn security_page_exists_and_lists_each_scheme() {
+    let html = read("security/index.html");
+    for scheme in SECURITY_SCHEMES {
+        assert!(
+            html.contains(&format!("id=\"scheme-{scheme}\"")),
+            "security page should anchor scheme `{scheme}`"
+        );
+        assert!(
+            html.contains(&format!("data-scheme-id=\"{scheme}\"")),
+            "security page should mark scheme `{scheme}` with data-scheme-id"
+        );
+    }
+    // Each known kind is rendered with its data-scheme-kind hook.
+    assert!(html.contains("data-scheme-kind=\"http-bearer\""));
+    assert!(html.contains("data-scheme-kind=\"oauth2\""));
+    // Client-credentials flow specifics surface.
+    assert!(html.contains("data-flow=\"client-credentials\""));
+    // MiniJinja auto-escape encodes `/` in attribute / text content as
+    // `&#x2f;`, which browsers transparently decode. Assert against
+    // the host substring rather than the full URL to stay neutral.
+    assert!(html.contains("auth.example.com"));
+    assert!(html.contains("pets:write"));
+}
+
+#[test]
+fn op_override_renders_override_not_inherited() {
+    let html = read(&format!("operations/{OP_WITH_AUTH_OVERRIDE}.html"));
+    assert!(
+        html.contains("data-auth-required"),
+        "{OP_WITH_AUTH_OVERRIDE} op page must render an Authorization section"
+    );
+    assert!(
+        html.contains("data-scheme-id=\"petsAdminOauth\""),
+        "{OP_WITH_AUTH_OVERRIDE} op should require petsAdminOauth"
+    );
+    assert!(
+        !auth_section_marked_inherited(&html),
+        "{OP_WITH_AUTH_OVERRIDE} op declares its own security and must not be marked (inherited)"
+    );
+    assert!(
+        html.contains("pets:write"),
+        "{OP_WITH_AUTH_OVERRIDE} should show its scope requirement"
+    );
+}
+
+#[test]
+fn op_inherits_doc_level_security() {
+    let html = read(&format!("operations/{OP_WITH_INHERITED_AUTH}.html"));
+    assert!(
+        html.contains("data-auth-required"),
+        "{OP_WITH_INHERITED_AUTH} should inherit the document-level requirement"
+    );
+    assert!(
+        html.contains("data-scheme-id=\"bearerAuth\""),
+        "{OP_WITH_INHERITED_AUTH} should resolve to bearerAuth"
+    );
+}
+
+/// True when the rendered auth section is annotated with the
+/// `(inherited from API default)` qualifier.
+fn auth_section_marked_inherited(html: &str) -> bool {
+    let Some(start) = html.find("id=\"auth-heading\"") else {
+        return false;
+    };
+    let window_end = (start + 400).min(html.len());
+    html[start..window_end].contains("(inherited")
+}
+
+// ---------- M1: schemas index ----------
+
+#[test]
+fn schemas_index_page_lists_every_emitted_schema() {
+    let html = read("schemas/index.html");
+    for s in SCHEMAS {
+        assert!(
+            html.contains(&format!("data-schema-id=\"{s}\"")),
+            "schemas index should list schema `{s}`"
+        );
+    }
+    // The discriminated union carries its kind badge. Templates emit
+    // attributes on multiple lines, so check each independently within
+    // a tight window around the schema's entry.
+    let id_anchor = html
+        .find(&format!("data-schema-id=\"{UNION_SCHEMA}\""))
+        .expect("union schema entry present");
+    let li_window = &html[id_anchor..(id_anchor + 400).min(html.len())];
+    assert!(
+        li_window.contains("data-schema-kind=\"union\""),
+        "schemas index should tag {UNION_SCHEMA} as kind=union"
+    );
+}
+
+#[test]
+fn sidebar_links_to_security_and_schemas() {
+    let html = read("index.html");
+    assert!(
+        html.contains("href=\"security/index.html\""),
+        "sidebar should link to the security page"
+    );
+    assert!(
+        html.contains("href=\"schemas/index.html\""),
+        "sidebar should link to the schemas index page"
+    );
+}
+
+// ---------- M1: discriminated union ----------
+
+#[test]
+fn discriminated_union_schema_renders_discriminator() {
+    let html = read(&format!("schemas/{UNION_SCHEMA}.html"));
+    assert!(
+        html.contains(&format!(
+            "data-discriminator-property=\"{UNION_DISCRIMINATOR_PROPERTY}\""
+        )),
+        "{UNION_SCHEMA} schema page should mark the discriminator property"
+    );
+    // Mapping table shows both tags.
+    assert!(
+        html.contains(&format!(
+            "<code>{UNION_DISCRIMINATOR_PROPERTY}: \"created\"</code>"
+        )),
+        "{UNION_SCHEMA} should render the 'created' tag in its discriminator mapping"
+    );
+    assert!(
+        html.contains(&format!(
+            "<code>{UNION_DISCRIMINATOR_PROPERTY}: \"deleted\"</code>"
+        )),
+        "{UNION_SCHEMA} should render the 'deleted' tag in its discriminator mapping"
+    );
+}
+
+#[test]
+fn op_returning_discriminated_union_inlines_discriminator() {
+    let html = read("operations/listPetEvents.html");
+    assert!(
+        html.contains(&format!(
+            "data-discriminator-property=\"{UNION_DISCRIMINATOR_PROPERTY}\""
+        )),
+        "operation page should inline the discriminator on the response body"
+    );
+}
+
+// ---------- M1: server variables ----------
+
+#[test]
+fn server_variables_render_on_landing() {
+    let html = read("index.html");
+    assert!(
+        html.contains("class=\"server-variables\""),
+        "landing should render <dl class=\"server-variables\"> for servers with variables"
+    );
+    assert!(html.contains("<code>tenant</code>"));
+    assert!(html.contains("<code>stage</code>"));
+    assert!(html.contains("<code>v1beta</code>"));
 }
 
 // ---------- helpers ----------

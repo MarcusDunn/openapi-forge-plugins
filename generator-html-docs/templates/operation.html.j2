@@ -29,6 +29,9 @@
   </section>
   {% endif %}
 
+  {% set security = op.security %}
+  {% include "partials/_auth_required.html.j2" %}
+
   {% if op.parameters %}
   <section aria-labelledby="parameters-heading">
     <h2 id="parameters-heading">Parameters</h2>
@@ -45,6 +48,8 @@
     <article data-media-type="{{ c.media_type }}">
       <h3><code>{{ c.media_type }}</code></h3>
       <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
+      {% set discriminator = c.discriminator %}
+      {% include "partials/_discriminator.html.j2" %}
       {% if c.example_json %}
         {% set example = c.example_json %}
         {% include "partials/_example.html.j2" %}
@@ -86,6 +91,8 @@
           <article data-media-type="{{ c.media_type }}">
             <h5><code>{{ c.media_type }}</code></h5>
             <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
+            {% set discriminator = c.discriminator %}
+            {% include "partials/_discriminator.html.j2" %}
             {% if c.example_json %}
               {% set example = c.example_json %}
               {% include "partials/_example.html.j2" %}

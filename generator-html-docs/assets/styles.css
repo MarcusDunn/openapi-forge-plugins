@@ -320,3 +320,125 @@ dl.meta dt { font-weight: 600; color: var(--fg-muted); }
   padding: 0.05em 0.35em;
   border-radius: 3px;
 }
+
+/* ---- sidebar sections ---- */
+.nav-sections ul {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.nav-sections a {
+  display: block;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 500;
+}
+.nav-sections a:hover { background: var(--bg); }
+.nav-sections a[aria-current="page"] {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ---- security page ---- */
+dl.scheme-detail, dl.scopes, dl.server-variables {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 0.5rem 1rem;
+  margin: 0.5rem 0;
+}
+dl.scheme-detail dt, dl.scopes dt, dl.server-variables dt {
+  font-weight: 500;
+  color: var(--fg-muted);
+}
+
+/* ---- per-op auth section ---- */
+.op-auth ol.auth-alternatives,
+.op-auth ul.auth-and {
+  list-style: none;
+  padding-left: 1rem;
+  margin: 0.25rem 0;
+}
+.op-auth ol.auth-alternatives { padding-left: 0; }
+.op-auth ul.auth-and {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.op-auth .auth-scopes {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+/* ---- schemas index ---- */
+.schemas-filter {
+  display: block;
+  margin-top: 0.5rem;
+}
+.schemas-filter input {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  width: min(100%, 32ch);
+}
+ul.schemas-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+ul.schemas-list li {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-muted);
+}
+ul.schemas-list li a {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  text-decoration: none;
+  color: var(--fg);
+}
+ul.schemas-list .schema-title { font-weight: 600; }
+.schema-kind-badge {
+  font-size: 0.75em;
+  padding: 0.05em 0.45em;
+  border-radius: 3px;
+  background: var(--code-bg);
+  color: var(--fg-muted);
+  text-transform: lowercase;
+}
+.schema-kind-object  { color: var(--accent); }
+.schema-kind-union   { color: var(--method-patch); }
+.schema-kind-enum    { color: var(--method-put); }
+.schema-kind-array   { color: var(--method-get); }
+.schema-desc {
+  margin: 0.25rem 0 0 0;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
+/* ---- discriminator ---- */
+.discriminator {
+  border-left: 3px solid var(--accent);
+  background: var(--bg-muted);
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0 0.75rem 0;
+  border-radius: 0 4px 4px 0;
+}
+.discriminator p { margin: 0 0 0.5rem 0; }
+.discriminator-mapping {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+.discriminator-mapping dt code { font-weight: 500; }
