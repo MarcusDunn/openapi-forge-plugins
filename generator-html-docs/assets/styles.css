@@ -127,6 +127,7 @@ a:hover { text-decoration: underline; }
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
   background: var(--bg-muted);
+  gap: 1rem;
 }
 .site-header__title a {
   font-weight: 600;
@@ -134,6 +135,44 @@ a:hover { text-decoration: underline; }
   color: var(--fg);
 }
 .site-header__version { margin: 0; color: var(--fg-muted); }
+.site-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.server-picker-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+.server-picker-label select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  max-width: 40ch;
+}
+.server-picker-effective {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  padding: 0.15rem 0.45rem;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.server-picker-effective[hidden] { display: none; }
 .theme-toggle {
   background: transparent;
   border: 1px solid var(--border);
@@ -144,6 +183,38 @@ a:hover { text-decoration: underline; }
   font-size: 1.1em;
 }
 .theme-toggle:hover { background: var(--bg); }
+
+/* ---- landing server-variable form ---- */
+form.server-variables {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-muted);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+form.server-variables .server-variable {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+form.server-variables input,
+form.server-variables select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+form.server-variables .server-variable-desc {
+  color: var(--fg-muted);
+  font-size: 0.85em;
+  flex: 1 1 100%;
+}
 
 /* ---- layout ---- */
 .layout {

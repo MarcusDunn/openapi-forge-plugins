@@ -543,18 +543,74 @@ fn op_page_response_article_has_id_anchor() {
     );
 }
 
+// ---------- M2: server picker + variable form ----------
+
+#[test]
+fn server_picker_renders_in_header_with_one_option_per_server() {
+    let html = read("index.html");
+    let picker_open = html
+        .find("data-server-picker")
+        .expect("header should carry a [data-server-picker] <select>");
+    let picker_close = html[picker_open..]
+        .find("</select>")
+        .expect("server-picker <select> must close")
+        + picker_open;
+    let picker = &html[picker_open..picker_close];
+    // MiniJinja's HTML autoescape encodes `/` in attribute values as
+    // `&#x2f;`, which browsers transparently decode when JS reads
+    // `option.value`. Assert against substrings that survive escape
+    // (the variable markers and host parts).
+    assert!(
+        picker.contains("{tenant}") && picker.contains("api.example.com"),
+        "picker should include the production server option"
+    );
+    assert!(
+        picker.contains("{stage}") && picker.contains("staging.example.com"),
+        "picker should include the staging server option"
+    );
+}
+
+#[test]
+fn server_variable_forms_are_editable_on_landing() {
+    let html = read("index.html");
+    // Each server with variables becomes a <form data-server-variables-form ...>.
+    assert!(
+        html.contains("data-server-variables-form"),
+        "landing must render an editable variable form per server"
+    );
+    // Variables that declare an `enum` lower to a <select data-variable=...>,
+    // bare strings to an <input data-variable=...>. We have both in the spec.
+    assert!(html.contains("data-variable=\"tenant\""));
+    assert!(html.contains("data-variable=\"stage\""));
+}
+
+#[test]
+fn header_effective_url_slot_is_present_for_aria_live() {
+    let html = read("index.html");
+    assert!(
+        html.contains("data-server-effective"),
+        "header should carry an <output data-server-effective> slot for the substituted URL"
+    );
+    assert!(
+        html.contains("aria-live=\"polite\""),
+        "the effective-URL slot should announce updates politely"
+    );
+}
+
 // ---------- M1: server variables ----------
 
 #[test]
 fn server_variables_render_on_landing() {
     let html = read("index.html");
+    // The variable form (added in M2) replaces the M1 static <dl>.
     assert!(
         html.contains("class=\"server-variables\""),
-        "landing should render <dl class=\"server-variables\"> for servers with variables"
+        "landing should render a <form class=\"server-variables\"> per server with variables"
     );
     assert!(html.contains("<code>tenant</code>"));
     assert!(html.contains("<code>stage</code>"));
-    assert!(html.contains("<code>v1beta</code>"));
+    // `enum`-constrained variables surface as <option>s.
+    assert!(html.contains("<option value=\"v1beta\""));
 }
 
 // ---------- helpers ----------

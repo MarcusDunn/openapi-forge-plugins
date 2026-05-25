@@ -38,6 +38,13 @@
   {% if servers %}
   <section aria-labelledby="servers-heading">
     <h2 id="servers-heading">Servers</h2>
+    <p>
+      <small>
+        Pick a server in the header to set the base URL used by
+        <em>Try it</em> on operation pages. Variable values you set
+        here are remembered in this browser.
+      </small>
+    </p>
     <ul class="servers">
       {% for s in servers %}
       <li data-server-url="{{ s.url }}">
@@ -45,18 +52,32 @@
         {% if s.name %}<span class="server-name">{{ s.name }}</span>{% endif %}
         {% if s.description_html %}<div class="server-desc">{{ s.description_html|safe }}</div>{% endif %}
         {% if s.variables %}
-        <dl class="server-variables">
+        <form
+          class="server-variables"
+          data-server-variables-form
+          data-server-url="{{ s.url }}"
+          onsubmit="return false;">
           {% for v in s.variables %}
-          <dt><code>{{ v.name }}</code></dt>
-          <dd>
-            default <code>{{ v.default }}</code>
+          <label class="server-variable">
+            <code>{{ v.name }}</code>
             {% if v.allowed %}
-            — allowed: {% for a in v.allowed %}<code>{{ a }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+            <select data-variable="{{ v.name }}">
+              {% for a in v.allowed %}
+              <option value="{{ a }}"{% if a == v.default %} selected{% endif %}>{{ a }}</option>
+              {% endfor %}
+            </select>
+            {% else %}
+            <input
+              type="text"
+              data-variable="{{ v.name }}"
+              value="{{ v.default }}"
+              placeholder="{{ v.default }}"
+              autocomplete="off">
             {% endif %}
-            {% if v.description_html %}{{ v.description_html|safe }}{% endif %}
-          </dd>
+            {% if v.description_html %}<span class="server-variable-desc">{{ v.description_html|safe }}</span>{% endif %}
+          </label>
           {% endfor %}
-        </dl>
+        </form>
         {% endif %}
       </li>
       {% endfor %}
