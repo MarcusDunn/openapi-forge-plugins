@@ -28,6 +28,28 @@
     {% elif scheme.kind == "http-bearer" %}
     <p>HTTP Bearer authentication. Send <code>Authorization: Bearer &lt;token&gt;</code>.</p>
     {% if scheme.bearer_format %}<p><small>Token format: <code>{{ scheme.bearer_format }}</code></small></p>{% endif %}
+    <form
+      class="auth-form"
+      data-auth-form
+      data-auth-kind="bearer"
+      data-scheme-id="{{ scheme.id }}"
+      onsubmit="return false;"
+      autocomplete="off">
+      <label>
+        Bearer token
+        <input
+          type="password"
+          data-auth-bearer-token
+          autocomplete="off"
+          placeholder="Paste a token">
+      </label>
+      <div class="auth-form__actions">
+        <button type="button" data-auth-bearer-save>Save</button>
+        <button type="button" data-auth-clear>Clear</button>
+        <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+      </div>
+      <p class="auth-form__hint"><small>Stored in <code>sessionStorage</code> for this tab only.</small></p>
+    </form>
     {% elif scheme.kind == "mutual-tls" %}
     <p>Mutual TLS. Provide a client certificate during the TLS handshake.</p>
     {% elif scheme.kind == "oauth2" %}
@@ -48,6 +70,50 @@
         <dd>{{ scope.description }}</dd>
         {% endfor %}
       </dl>
+      {% endif %}
+      {% if flow.kind == "client-credentials" and flow.token_url %}
+      <form
+        class="auth-form"
+        data-auth-form
+        data-auth-kind="oauth2-client-credentials"
+        data-scheme-id="{{ scheme.id }}"
+        data-token-url="{{ flow.token_url }}"
+        onsubmit="return false;"
+        autocomplete="off">
+        <label>
+          Client ID
+          <input type="text" data-auth-client-id autocomplete="off" placeholder="client id">
+        </label>
+        <label>
+          Client secret
+          <input type="password" data-auth-client-secret autocomplete="off" placeholder="client secret">
+        </label>
+        {% if flow.scopes %}
+        <fieldset class="auth-form__scopes">
+          <legend>Scopes</legend>
+          {% for scope in flow.scopes %}
+          <label class="auth-form__scope">
+            <input type="checkbox" data-auth-scope value="{{ scope.name }}">
+            <code>{{ scope.name }}</code>
+            <small>{{ scope.description }}</small>
+          </label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
+        <div class="auth-form__actions">
+          <button type="button" data-auth-oauth-request>Request token</button>
+          <button type="button" data-auth-clear>Clear</button>
+          <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+        </div>
+        <p class="auth-form__hint"><small>
+          Browser-only — do not embed real production secrets. Tokens
+          live in <code>sessionStorage</code> for this tab and clear
+          when you close it. Token requests are subject to the same
+          CORS rules as the rest of the Try-it flow; if your IdP
+          doesn't allow this origin, get a token elsewhere and paste
+          it into a temporary Bearer scheme instead.
+        </small></p>
+      </form>
       {% endif %}
     </section>
     {% endfor %}

@@ -543,6 +543,44 @@ fn op_page_response_article_has_id_anchor() {
     );
 }
 
+// ---------- M5: auth flows ----------
+
+#[test]
+fn security_page_renders_bearer_token_form() {
+    let html = read("security/index.html");
+    assert!(
+        html.contains("data-auth-form")
+            && html.contains("data-auth-kind=\"bearer\"")
+            && html.contains("data-scheme-id=\"bearerAuth\""),
+        "security page should include a Bearer credentials form for bearerAuth"
+    );
+    assert!(
+        html.contains("data-auth-bearer-token"),
+        "bearer form should include a token input"
+    );
+}
+
+#[test]
+fn security_page_renders_oauth2_client_credentials_form() {
+    let html = read("security/index.html");
+    assert!(
+        html.contains("data-auth-kind=\"oauth2-client-credentials\""),
+        "security page should include a client-credentials form for petsAdminOauth"
+    );
+    assert!(html.contains("data-auth-client-id"));
+    assert!(html.contains("data-auth-client-secret"));
+    assert!(html.contains("data-auth-scope"));
+}
+
+#[test]
+fn op_with_security_shows_auth_pill_in_try_it() {
+    let html = read("operations/deletePet.html");
+    assert!(
+        html.contains("data-required-scheme=\"petsAdminOauth\""),
+        "deletePet try-it should show an auth pill for its required scheme"
+    );
+}
+
 // ---------- M4: try-it request builder ----------
 
 #[test]

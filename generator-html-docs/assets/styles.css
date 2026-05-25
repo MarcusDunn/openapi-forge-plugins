@@ -548,6 +548,83 @@ ul.schemas-list .schema-title { font-weight: 600; }
 .copy-btn.copied { background: var(--method-get); color: white; border-color: var(--method-get); }
 figure.example figcaption { display: flex; align-items: center; gap: 0.4rem; }
 
+/* ---- security-page credential forms ---- */
+.auth-form {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0 1rem 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+}
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+.auth-form input[type="text"],
+.auth-form input[type="password"] {
+  background: var(--bg-muted);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  width: 100%;
+}
+.auth-form__scopes {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-muted);
+}
+.auth-form__scopes legend { font-weight: 500; color: var(--fg-muted); }
+.auth-form__scope {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0.15rem 0;
+}
+.auth-form__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.auth-form__actions button {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: none;
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  font-weight: 500;
+}
+.auth-form__actions button:hover { filter: brightness(1.05); }
+.auth-form__status { color: var(--fg-muted); font-size: 0.9em; }
+.auth-form__hint { color: var(--fg-muted); }
+
+.auth-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.85em;
+  margin-right: 0.4rem;
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+}
+.auth-pill--ok { border-color: var(--method-get); color: var(--method-get); }
+.auth-pill--missing { border-color: var(--method-delete); color: var(--method-delete); }
+.try-it__auth-status { margin: 0.25rem 0 0.5rem 0; }
+
 /* ---- try-it request builder ---- */
 .try-it {
   border: 1px solid var(--accent);

@@ -14,6 +14,7 @@
   "use strict";
 
   var STORAGE_KEY = "openapi-forge-html-docs:state:v1";
+  var AUTH_KEY = "openapi-forge-html-docs:auth:v1";
 
   // ---- state ----
 
@@ -196,6 +197,173 @@
     });
   }
 
+  // ---- auth state (sessionStorage; tab-scoped) ----
+
+  function loadAuth() {
+    try {
+      var raw = sessionStorage.getItem(AUTH_KEY);
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object" && parsed.schemes) return parsed;
+      }
+    } catch (e) {}
+    return { schemes: {} };
+  }
+
+  function saveAuth(a) {
+    try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(a)); } catch (e) {}
+  }
+
+  var authState = loadAuth();
+
+  /// Is the credential for `schemeId` valid right now?
+  function schemeSatisfied(schemeId) {
+    var s = authState.schemes[schemeId];
+    if (!s) return false;
+    if (s.kind === "bearer") return !!s.token;
+    if (s.kind === "oauth2-client-credentials") {
+      if (!s.access_token) return false;
+      if (s.expires_at && Date.now() > s.expires_at) return false;
+      return true;
+    }
+    return false;
+  }
+
+  function authHeaderFor(schemeId) {
+    var s = authState.schemes[schemeId];
+    if (!s) return null;
+    if (s.kind === "bearer") return s.token ? "Bearer " + s.token : null;
+    if (s.kind === "oauth2-client-credentials") {
+      return s.access_token ? "Bearer " + s.access_token : null;
+    }
+    return null;
+  }
+
+  function setBearerToken(schemeId, token) {
+    if (token) {
+      authState.schemes[schemeId] = { kind: "bearer", token: token };
+    } else {
+      delete authState.schemes[schemeId];
+    }
+    saveAuth(authState);
+    refreshAllTryItAuthIndicators();
+  }
+
+  function setOAuthToken(schemeId, accessToken, expiresIn) {
+    var expiresAt = expiresIn ? Date.now() + Math.max(0, expiresIn - 30) * 1000 : null;
+    authState.schemes[schemeId] = {
+      kind: "oauth2-client-credentials",
+      access_token: accessToken,
+      expires_at: expiresAt,
+    };
+    saveAuth(authState);
+    refreshAllTryItAuthIndicators();
+  }
+
+  function clearScheme(schemeId) {
+    delete authState.schemes[schemeId];
+    saveAuth(authState);
+    refreshAllTryItAuthIndicators();
+  }
+
+  function initAuthForms() {
+    var forms = document.querySelectorAll("[data-auth-form]");
+    Array.prototype.forEach.call(forms, function (form) {
+      var schemeId = form.dataset.schemeId;
+      var status = form.querySelector("[data-auth-status]");
+      var kind = form.dataset.authKind;
+
+      // Rehydrate existing token state into the form display.
+      if (kind === "bearer") {
+        var existing = authState.schemes[schemeId];
+        if (existing && existing.token) {
+          status.textContent = "Token saved.";
+        }
+        var input = form.querySelector("[data-auth-bearer-token]");
+        var save = form.querySelector("[data-auth-bearer-save]");
+        save.addEventListener("click", function () {
+          setBearerToken(schemeId, input.value.trim());
+          status.textContent = input.value.trim() ? "Token saved." : "Cleared.";
+        });
+      } else if (kind === "oauth2-client-credentials") {
+        var existingOauth = authState.schemes[schemeId];
+        if (existingOauth && existingOauth.access_token) {
+          status.textContent = existingOauth.expires_at
+            ? "Token cached. Expires " + new Date(existingOauth.expires_at).toLocaleTimeString() + "."
+            : "Token cached.";
+        }
+        var clientId = form.querySelector("[data-auth-client-id]");
+        var clientSecret = form.querySelector("[data-auth-client-secret]");
+        var scopeBoxes = form.querySelectorAll("[data-auth-scope]");
+        var requestBtn = form.querySelector("[data-auth-oauth-request]");
+        var tokenUrl = form.dataset.tokenUrl;
+        requestBtn.addEventListener("click", function () {
+          requestClientCredentialsToken(
+            schemeId,
+            tokenUrl,
+            clientId.value.trim(),
+            clientSecret.value,
+            Array.prototype.filter.call(scopeBoxes, function (b) { return b.checked; })
+              .map(function (b) { return b.value; }),
+            status
+          );
+        });
+      }
+
+      var clearBtn = form.querySelector("[data-auth-clear]");
+      if (clearBtn) {
+        clearBtn.addEventListener("click", function () {
+          clearScheme(schemeId);
+          status.textContent = "Cleared.";
+          // Also clear the inputs visually.
+          var inputs = form.querySelectorAll("input");
+          Array.prototype.forEach.call(inputs, function (i) {
+            if (i.type === "checkbox") i.checked = false;
+            else i.value = "";
+          });
+        });
+      }
+    });
+  }
+
+  function requestClientCredentialsToken(schemeId, tokenUrl, clientId, clientSecret, scopes, statusEl) {
+    if (!tokenUrl || !clientId || !clientSecret) {
+      statusEl.textContent = "Missing client id / secret / token URL.";
+      return;
+    }
+    statusEl.textContent = "requesting…";
+    var body = "grant_type=client_credentials";
+    if (scopes.length) body += "&scope=" + encodeURIComponent(scopes.join(" "));
+    var headers = {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Authorization": "Basic " + btoa(clientId + ":" + clientSecret),
+    };
+    fetch(tokenUrl, { method: "POST", headers: headers, body: body, credentials: "omit" })
+      .then(function (resp) {
+        return resp.text().then(function (text) {
+          var data;
+          try { data = JSON.parse(text); } catch (e) { data = null; }
+          if (!resp.ok) {
+            statusEl.textContent =
+              "HTTP " + resp.status +
+              ((data && data.error) ? " — " + data.error : "") +
+              ((data && data.error_description) ? ": " + data.error_description : "");
+            return;
+          }
+          if (!data || !data.access_token) {
+            statusEl.textContent = "OK but no access_token in response.";
+            return;
+          }
+          setOAuthToken(schemeId, data.access_token, data.expires_in || null);
+          statusEl.textContent = "Token cached" +
+            (data.expires_in ? " — expires in " + data.expires_in + "s." : ".");
+        });
+      })
+      .catch(function (err) {
+        statusEl.textContent = (err && err.message) ? err.message : "network / CORS error";
+      });
+  }
+
   // ---- try-it request builder ----
 
   function highlightJsonClient(text) {
@@ -233,7 +401,31 @@
     Array.prototype.forEach.call(inputs, function (i) {
       if (i.value !== "") h[i.dataset.name] = i.value;
     });
+    // Auth: if the op declares security, attach Authorization from
+    // the first satisfied scheme. Param-supplied Authorization always
+    // wins, so users can manually override.
+    if (!h["Authorization"]) {
+      var pills = form.querySelectorAll("[data-required-scheme]");
+      for (var i = 0; i < pills.length; i++) {
+        var schemeId = pills[i].dataset.requiredScheme;
+        var header = authHeaderFor(schemeId);
+        if (header) { h["Authorization"] = header; break; }
+      }
+    }
     return h;
+  }
+
+  /// Update the green/red pill next to each declared scheme on a
+  /// try-it form. Called after any auth state change.
+  function refreshAllTryItAuthIndicators() {
+    var pills = document.querySelectorAll("[data-required-scheme]");
+    Array.prototype.forEach.call(pills, function (pill) {
+      var ok = schemeSatisfied(pill.dataset.requiredScheme);
+      pill.classList.toggle("auth-pill--ok", ok);
+      pill.classList.toggle("auth-pill--missing", !ok);
+      var state = pill.querySelector("[data-auth-state]");
+      if (state) state.textContent = ok ? "✓ ready" : "✗ missing";
+    });
   }
 
   function statusClass(status) {
@@ -384,6 +576,8 @@
     initServerVariableForms();
     initSidebarOnPath();
     initCopyButtons();
+    initAuthForms();
     initTryIt();
+    refreshAllTryItAuthIndicators();
   });
 })();

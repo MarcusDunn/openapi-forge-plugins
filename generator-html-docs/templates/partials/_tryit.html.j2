@@ -61,6 +61,19 @@
   </fieldset>
   {% endif %}
 
+  {% if op.security %}
+  <p class="try-it__auth-status" data-tryit-auth-indicator>
+    {% for alt in op.security.alternatives %}
+      {% for req in alt %}
+        <span class="auth-pill" data-required-scheme="{{ req.scheme_id }}">
+          <code>{{ req.scheme_id }}</code>
+          <span class="auth-pill__state" data-auth-state>—</span>
+        </span>
+      {% endfor %}
+    {% endfor %}
+  </p>
+  {% endif %}
+
   <div class="try-it__actions">
     <button type="button" data-tryit-send class="try-it__send">Send request</button>
     <span data-tryit-status role="status" aria-live="polite"></span>
