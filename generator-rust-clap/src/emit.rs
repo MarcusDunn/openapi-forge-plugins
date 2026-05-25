@@ -672,8 +672,19 @@ fn emit_main_rs(
     let placeholder_pascal_ident = placeholder_pascal_str.as_deref().map(ident);
 
     let schema_consts = emit_schema_consts(ir);
+    let info_summary = ir.info.summary.as_deref();
+    let info_description = ir.info.description.as_deref();
+    // Short `-h` line: prefer the spec's `info.summary` (one-liner) over
+    // the bare title — it's what spec authors write specifically for
+    // human consumption. Title remains the fallback (always present).
+    let short_about = info_summary
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(title);
     let long_about_lit = build_long_about(
         title,
+        info_summary,
+        info_description,
         bin_name,
         &prefix,
         oauth_active,
@@ -1088,7 +1099,7 @@ fn emit_main_rs(
         #[command(
             name = #bin_name,
             version = #version,
-            about = #title,
+            about = #short_about,
             long_about = #long_about_lit,
         )]
         struct Cli {
@@ -1265,7 +1276,7 @@ fn emit_group_types(
     let q = qualified_pascal(prefix, &group.name);
     let args_ident = format_ident!("{}Args", q);
     let cmd_ident = format_ident!("{}Cmd", q);
-    let about = group_doc(group).unwrap_or_default();
+    let group_doc_attrs = doc_attrs_for(group_doc(group).as_deref());
 
     let cmd_variants: Vec<TokenStream> = group
         .children
@@ -1274,7 +1285,7 @@ fn emit_group_types(
             let child_q = qualified_pascal(&q, &child.name);
             let child_args = format_ident!("{}Args", child_q);
             let variant = format_ident!("{}", pascal_case(&child.name));
-            let doc_attr = group_doc(child).map(|d| quote!(#[doc = #d]));
+            let doc_attr = doc_attrs_for(group_doc(child).as_deref());
             quote!(#doc_attr #variant(#child_args),)
         })
         .chain(
@@ -1293,7 +1304,7 @@ fn emit_group_types(
 
     quote! {
         #[derive(Args)]
-        #[command(about = #about)]
+        #group_doc_attrs
         pub struct #args_ident {
             #[command(subcommand)]
             cmd: #cmd_ident,
@@ -1376,8 +1387,8 @@ fn render_op_variant(
     exchange: Option<&TokenExchangeInfo>,
 ) -> TokenStream {
     let variant = format_ident!("{}", pascal_case(&op.id));
-    let doc_attr = first_line(op.description.as_deref().or(op.summary.as_deref()))
-        .map(|d| quote!(#[doc = #d]));
+    let doc_text = combine_summary_desc(op.summary.as_deref(), op.description.as_deref());
+    let doc_attr = doc_attrs_for(doc_text.as_deref());
     let exclude = exchange
         .filter(|ex| op_uses_placeholder(op, &ex.placeholder))
         .map(|ex| ex.placeholder.as_str());
@@ -2063,7 +2074,7 @@ struct Field {
 fn field_to_tokens(f: &Field) -> TokenStream {
     let ident = &f.ident;
     let ty = &f.ty;
-    let doc_attr = f.doc.as_ref().map(|d| quote!(#[doc = #d]));
+    let doc_attr = doc_attrs_for(f.doc.as_deref());
     let arg_attr = f.arg_attr.as_ref().map(|a| quote!(#[arg(#a)]));
     quote!(#doc_attr #arg_attr #ident: #ty,)
 }
@@ -2210,7 +2221,12 @@ fn field_for_param(spec: &Ir, p: &Parameter, kind: FieldKind, relax: &[&str]) ->
     Field {
         ident: field_ident,
         ty,
-        doc: first_line(p.description.as_deref()),
+        doc: p
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         arg_attr,
     }
 }
@@ -2222,14 +2238,25 @@ fn field_for_body(body: &Body, relax: &[&str]) -> Field {
     } else {
         quote!(long = "body")
     };
+    // Spec-supplied body description (if any) becomes the short help; the
+    // syntax hint always trails as a second paragraph so `--help` users
+    // still learn the inline / `@file` / `-` shorthand even when the spec
+    // contributes its own description.
+    let format_hint = "Accepts inline JSON, @file.json (read from file), or - (read from stdin). \
+         Run with --body-schema to print the JSON Schema.";
+    let spec_doc = body
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let doc = match spec_doc {
+        Some(desc) => format!("{desc}\n\n{format_hint}"),
+        None => format!("Request body.\n\n{format_hint}"),
+    };
     Field {
         ident: format_ident!("body"),
         ty: quote!(Option<String>),
-        doc: Some(
-            "Request body. Inline JSON, @file.json (read from file), or - (read from stdin). \
-             Run with --body-schema to print the JSON Schema."
-                .into(),
-        ),
+        doc: Some(doc),
         arg_attr: Some(arg_attr),
     }
 }
@@ -2261,6 +2288,8 @@ fn op_has_response_content(op: &Operation) -> bool {
 
 fn build_long_about(
     title: &str,
+    info_summary: Option<&str>,
+    info_description: Option<&str>,
     bin_name: &str,
     prefix: &str,
     oauth_active: bool,
@@ -2269,6 +2298,18 @@ fn build_long_about(
     let mut s = String::new();
     if !title.trim().is_empty() {
         s.push_str(title.trim());
+        s.push_str("\n\n");
+    }
+    // `info.summary` (OAS 3.1+) gives a tagline that's wordier than the
+    // bare title but tighter than the description. Show it under the title
+    // when present, then unfold the full `info.description` (if any) as
+    // its own block before the generator-supplied usage cheatsheet.
+    if let Some(summary) = info_summary.map(str::trim).filter(|s| !s.is_empty()) {
+        s.push_str(summary);
+        s.push_str("\n\n");
+    }
+    if let Some(desc) = info_description.map(str::trim).filter(|s| !s.is_empty()) {
+        s.push_str(desc);
         s.push_str("\n\n");
     }
     s.push_str(&format!(
@@ -2352,12 +2393,7 @@ fn emit_schema_consts(ir: &Ir) -> TokenStream {
 }
 fn group_doc(group: &TagGroup) -> Option<String> {
     let tag = group.tag?;
-    if let Some(s) = &tag.summary {
-        if !s.is_empty() {
-            return Some(s.clone());
-        }
-    }
-    first_line(tag.description.as_deref())
+    combine_summary_desc(tag.summary.as_deref(), tag.description.as_deref())
 }
 
 fn qualified_pascal(prefix: &str, name: &str) -> String {
@@ -2468,10 +2504,37 @@ fn emit_readme(ir: &Ir, bin_name: &str, oauth: Option<&OauthInfo>) -> String {
     )
 }
 
-fn first_line(s: Option<&str>) -> Option<String> {
-    s.and_then(|s| s.lines().next())
-        .map(|l| l.trim().to_string())
-        .filter(|s| !s.is_empty())
+/// Combine an OAS `summary` (one-liner) and `description` (long-form) into
+/// the doc string we hand to clap. Clap's derive macro splits on the first
+/// blank line: text before it becomes the short `-h`/`about` help; the
+/// whole string becomes the long `--help`/`long_about` help. We collapse
+/// any summary to its first line and put a blank line between summary and
+/// description so the split lands where the spec author intended.
+fn combine_summary_desc(summary: Option<&str>, description: Option<&str>) -> Option<String> {
+    let summary = summary
+        .and_then(|s| s.lines().next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let description = description.map(str::trim).filter(|s| !s.is_empty());
+    match (summary, description) {
+        (None, None) => None,
+        (Some(s), None) => Some(s.to_string()),
+        (None, Some(d)) => Some(d.to_string()),
+        (Some(s), Some(d)) => Some(format!("{s}\n\n{d}")),
+    }
+}
+
+/// Emit one `#[doc = "..."]` attribute per line of `s`. Blank lines are
+/// preserved so the clap derive macro can find a paragraph boundary.
+fn doc_attrs_for(s: Option<&str>) -> TokenStream {
+    let Some(text) = s.map(str::trim).filter(|s| !s.is_empty()) else {
+        return TokenStream::new();
+    };
+    let attrs = text.lines().map(|line| {
+        let l = line.trim_end();
+        quote!(#[doc = #l])
+    });
+    quote!(#(#attrs)*)
 }
 
 fn escape_rust_string(s: &str) -> String {
