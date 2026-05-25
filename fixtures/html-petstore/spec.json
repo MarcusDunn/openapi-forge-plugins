@@ -192,6 +192,36 @@
         }
       }
     },
+    "/tenants/{tenantId}/pets": {
+      "get": {
+        "operationId": "listTenantPets",
+        "tags": ["pets-admin"],
+        "security": [
+          { "tenantOauth": ["openid", "roles"] }
+        ],
+        "summary": "List pets for a tenant",
+        "description": "Tenant-scoped read. The Try-it form will RFC 8693-exchange your `tenantOauth` access token for an audience-scoped one (`urn:html-petstore:tenant:{tenantId}`) before sending.",
+        "parameters": [
+          {
+            "name": "tenantId",
+            "in": "path",
+            "required": true,
+            "description": "Tenant slug.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenant's pets.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pets" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pets/{petId}/events": {
       "get": {
         "operationId": "listPetEvents",
@@ -416,6 +446,24 @@
               "pets:write": "Create, update, or delete pet records."
             }
           }
+        }
+      },
+      "tenantOauth": {
+        "type": "oauth2",
+        "description": "OAuth 2.0 Authorization Code + PKCE against the platform IdP. The wire shape on the API is `Authorization: Bearer <jwt>`; this entry exists so OAuth-aware clients can run the auth flow themselves and so they can perform RFC 8693 token exchange to mint per-tenant resource-server tokens.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.example.com/oauth/authorize",
+            "tokenUrl": "https://auth.example.com/oauth/token",
+            "scopes": {
+              "openid": "OIDC identity claims.",
+              "roles": "Resource-access role mapping (so resource_access.<rs>.roles is populated)."
+            }
+          }
+        },
+        "x-token-exchange": {
+          "audience-template": "urn:html-petstore:tenant:{tenantId}",
+          "scope": ["roles"]
         }
       }
     }

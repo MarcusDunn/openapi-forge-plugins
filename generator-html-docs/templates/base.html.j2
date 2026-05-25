@@ -12,6 +12,8 @@
   {% endif %}
   <link rel="stylesheet" href="{{ chrome.asset_prefix|safe }}_static/styles.css">
   <meta name="generator" content="openapi-forge generator-html-docs">
+  <meta name="openapi-forge-oauth-clients" content="{{ chrome.oauth_client_config_json }}">
+  <meta name="openapi-forge-callback-path" content="{{ chrome.asset_prefix|safe }}auth/callback.html">
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>

@@ -71,6 +71,60 @@
         {% endfor %}
       </dl>
       {% endif %}
+      {% if flow.kind == "authorization-code" and flow.authorization_url and flow.token_url %}
+      <form
+        class="auth-form"
+        data-auth-form
+        data-auth-kind="oauth2-authorization-code"
+        data-scheme-id="{{ scheme.id }}"
+        data-authorization-url="{{ flow.authorization_url }}"
+        data-token-url="{{ flow.token_url }}"
+        {% if scheme.token_exchange %}
+        data-token-exchange-audience-template="{{ scheme.token_exchange.audience_template }}"
+        data-token-exchange-placeholder="{{ scheme.token_exchange.placeholder }}"
+        data-token-exchange-extra-scope="{{ scheme.token_exchange.extra_scope|join(' ') }}"
+        {% endif %}
+        onsubmit="return false;"
+        autocomplete="off">
+        {% if flow.scopes %}
+        <fieldset class="auth-form__scopes">
+          <legend>Scopes</legend>
+          {% for scope in flow.scopes %}
+          <label class="auth-form__scope">
+            <input type="checkbox" data-auth-scope value="{{ scope.name }}">
+            <code>{{ scope.name }}</code>
+            <small>{{ scope.description }}</small>
+          </label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
+        {% if scheme.token_exchange %}
+        <p class="auth-form__hint"><small>
+          This scheme advertises RFC 8693 token exchange. After login,
+          operations whose path includes
+          <code>{<wbr>{{ scheme.token_exchange.placeholder }}<wbr>}</code>
+          will mint a per-target token with audience
+          <code>{{ scheme.token_exchange.audience_template }}</code>
+          {% if scheme.token_exchange.extra_scope %}
+          (scope: {% for s in scheme.token_exchange.extra_scope %}<code>{{ s }}</code>{% if not loop.last %} {% endif %}{% endfor %})
+          {% endif %}.
+        </small></p>
+        {% endif %}
+        <div class="auth-form__actions">
+          <button type="button" data-auth-pkce-login>Login</button>
+          <button type="button" data-auth-clear>Sign out</button>
+          <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+        </div>
+        <p class="auth-form__hint"><small>
+          Opens the IdP's authorization page in a popup. The popup
+          redirects to <code>auth/callback.html</code> — register
+          <strong><span data-auth-pkce-redirect-uri></span></strong>
+          (this docs site's URL plus that path) with your IdP as an
+          allowed redirect URI for the configured client. Tokens
+          live in <code>sessionStorage</code>.
+        </small></p>
+      </form>
+      {% endif %}
       {% if flow.kind == "client-credentials" and flow.token_url %}
       <form
         class="auth-form"

@@ -581,6 +581,61 @@ fn op_with_security_shows_auth_pill_in_try_it() {
     );
 }
 
+// ---------- M5b: PKCE + token exchange ----------
+
+#[test]
+fn auth_callback_page_emitted() {
+    assert!(
+        exists("auth/callback.html"),
+        "PKCE callback page must be emitted at auth/callback.html"
+    );
+}
+
+#[test]
+fn pkce_login_form_present_for_authorization_code_scheme() {
+    let html = read("security/index.html");
+    assert!(
+        html.contains("data-auth-kind=\"oauth2-authorization-code\""),
+        "security page should include an Authorization-Code login form"
+    );
+    assert!(html.contains("data-auth-pkce-login"));
+    assert!(html.contains("data-authorization-url"));
+}
+
+#[test]
+fn token_exchange_annotation_appears_on_scheme() {
+    let html = read("security/index.html");
+    assert!(
+        html.contains("data-token-exchange-audience-template"),
+        "tenantOauth scheme should carry its x-token-exchange audience template"
+    );
+    assert!(html.contains("urn:html-petstore:tenant:{tenantId}"));
+}
+
+#[test]
+fn op_with_token_exchange_marker_carries_data_attrs() {
+    let html = read("operations/listTenantPets.html");
+    assert!(
+        html.contains("data-tx-scheme-id=\"tenantOauth\""),
+        "listTenantPets try-it form should be marked for token-exchange against tenantOauth"
+    );
+    assert!(html.contains("data-tx-placeholder=\"tenantId\""));
+    assert!(html.contains("data-tx-audience-template"));
+}
+
+#[test]
+fn oauth_client_config_meta_present() {
+    let html = read("operations/listPets.html");
+    assert!(
+        html.contains("name=\"openapi-forge-oauth-clients\""),
+        "every page should ship the oauth client config meta tag"
+    );
+    assert!(
+        html.contains("name=\"openapi-forge-callback-path\""),
+        "every page should ship the callback path meta tag"
+    );
+}
+
 // ---------- M4: try-it request builder ----------
 
 #[test]

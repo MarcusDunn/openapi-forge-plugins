@@ -5,7 +5,13 @@
   data-tryit-form
   data-method="{{ op.method }}"
   data-path-template="{{ op.path_template }}"
-  data-operation-id="{{ op.id }}">
+  data-operation-id="{{ op.id }}"
+  {% if op.token_exchange_marker %}
+  data-tx-scheme-id="{{ op.token_exchange_marker.scheme_id }}"
+  data-tx-audience-template="{{ op.token_exchange_marker.audience_template }}"
+  data-tx-placeholder="{{ op.token_exchange_marker.placeholder }}"
+  data-tx-extra-scope="{{ op.token_exchange_marker.extra_scope|join(' ') }}"
+  {% endif %}>
   <h2 id="tryit-heading">Try it</h2>
   <p class="try-it__server-line">
     Request will be sent to

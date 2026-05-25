@@ -1,4 +1,6 @@
-use serde::Deserialize;
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -17,6 +19,37 @@ pub struct Config {
     /// when CORS makes the runtime call useless.
     #[serde(default = "default_true")]
     pub enable_try_it: bool,
+    /// Per-scheme OAuth 2.0 client configuration (PKCE / Authorization
+    /// Code, optionally with client_secret + RFC 8693 token exchange).
+    /// The map is keyed by `securitySchemes.<id>`; only schemes declared
+    /// in the spec are honoured.
+    #[serde(default)]
+    pub oauth: BTreeMap<String, OAuthClientConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct OAuthClientConfig {
+    /// OAuth client_id registered with the IdP.
+    pub client_id: String,
+    /// Optional client_secret. Embedded in the generated site — only
+    /// use for clients the IdP treats as confidential AND that you're
+    /// OK exposing publicly (typical when the docs site is internal
+    /// or token-exchange-only). Required when the IdP demands client
+    /// auth for token-exchange.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Default scopes to request at login. When empty, the security
+    /// page's scope checkboxes default to the spec-declared scopes.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// Pre-registered redirect URI. Defaults to
+    /// `<page-origin>/<site-root>/auth/callback.html` computed in the
+    /// browser. Set this when you're hosting the docs behind a known
+    /// canonical origin and have registered just one redirect URI
+    /// with the IdP.
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
 }
 
 impl Default for Config {
@@ -27,6 +60,7 @@ impl Default for Config {
             include_schemas: true,
             base_url: None,
             enable_try_it: true,
+            oauth: BTreeMap::new(),
         }
     }
 }

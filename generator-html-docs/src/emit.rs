@@ -83,6 +83,12 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
         "_static/app.js",
         include_str!("../assets/app.js"),
     ));
+    // The OAuth Authorization-Code popup redirects here. It's the
+    // same on every site, so we just drop a verbatim static page.
+    files.push(OutputFile::text(
+        "auth/callback.html",
+        include_str!("../assets/auth_callback.html"),
+    ));
 
     Outcome::Generated(GenerationOutput { files, diagnostics })
 }

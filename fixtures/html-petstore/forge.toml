@@ -3,7 +3,15 @@ spec = "spec.json"
 
 [generator]
 wasm = "../../target/wasm32-wasip2/release/generator_html_docs.wasm"
-config = { theme = "auto", includeSchemas = true }
+
+[generator.config]
+theme = "auto"
+includeSchemas = true
+
+[generator.config.oauth.tenantOauth]
+clientId = "html-petstore-docs"
+clientSecret = "fixture-secret-not-real"
+scopes = ["openid", "roles"]
 
 [output]
 dir = "out"

@@ -15,6 +15,29 @@
 
   var STORAGE_KEY = "openapi-forge-html-docs:state:v1";
   var AUTH_KEY = "openapi-forge-html-docs:auth:v1";
+  var PKCE_PENDING_KEY = "openapi-forge-html-docs:pkce-pending:v1";
+
+  // ---- baked-in oauth client config (per scheme id) ----
+
+  function readOauthClientConfig() {
+    var meta = document.querySelector('meta[name="openapi-forge-oauth-clients"]');
+    if (!meta) return {};
+    try { return JSON.parse(meta.content || "{}"); } catch (e) { return {}; }
+  }
+  function readCallbackPath() {
+    var meta = document.querySelector('meta[name="openapi-forge-callback-path"]');
+    return meta ? meta.content : "auth/callback.html";
+  }
+  var OAUTH_CLIENTS = readOauthClientConfig();
+
+  function resolvedRedirectUri(schemeId) {
+    var cfg = OAUTH_CLIENTS[schemeId] || {};
+    if (cfg.redirectUri) return cfg.redirectUri;
+    // The meta tag gives us a relative path from the current page.
+    // Resolve it against the page origin so it becomes the absolute
+    // URL the IdP redirects to.
+    return new URL(readCallbackPath(), window.location.href).toString();
+  }
 
   // ---- state ----
 
@@ -259,7 +282,7 @@
     var s = authState.schemes[schemeId];
     if (!s) return false;
     if (s.kind === "bearer") return !!s.token;
-    if (s.kind === "oauth2-client-credentials") {
+    if (s.kind === "oauth2-client-credentials" || s.kind === "oauth2-authorization-code") {
       if (!s.access_token) return false;
       if (s.expires_at && Date.now() > s.expires_at) return false;
       return true;
@@ -271,7 +294,7 @@
     var s = authState.schemes[schemeId];
     if (!s) return null;
     if (s.kind === "bearer") return s.token ? "Bearer " + s.token : null;
-    if (s.kind === "oauth2-client-credentials") {
+    if (s.kind === "oauth2-client-credentials" || s.kind === "oauth2-authorization-code") {
       return s.access_token ? "Bearer " + s.access_token : null;
     }
     return null;
@@ -364,6 +387,255 @@
     });
   }
 
+  // ---- PKCE primitives ----
+
+  function randomString(bytes) {
+    var arr = new Uint8Array(bytes);
+    crypto.getRandomValues(arr);
+    return base64url(arr);
+  }
+  function base64url(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function sha256base64url(text) {
+    return crypto.subtle
+      .digest("SHA-256", new TextEncoder().encode(text))
+      .then(function (buf) { return base64url(new Uint8Array(buf)); });
+  }
+
+  function loadPkcePending() {
+    try {
+      var raw = sessionStorage.getItem(PKCE_PENDING_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) { return {}; }
+  }
+  function savePkcePending(p) {
+    try { sessionStorage.setItem(PKCE_PENDING_KEY, JSON.stringify(p)); } catch (e) {}
+  }
+
+  function beginPkceLogin(form, schemeId, statusEl) {
+    var cfg = OAUTH_CLIENTS[schemeId] || {};
+    if (!cfg.clientId) {
+      statusEl.textContent =
+        "No client_id configured for `" + schemeId + "`. Set `oauth." + schemeId +
+        ".clientId` in the generator config.";
+      return;
+    }
+    var authUrl = form.dataset.authorizationUrl;
+    var tokenUrl = form.dataset.tokenUrl;
+    var redirectUri = resolvedRedirectUri(schemeId);
+
+    // Scopes: union of the user's checkbox picks and the config
+    // defaults. Falling back to whatever the flow declared is the
+    // template's job (it pre-emits checkboxes).
+    var scopeBoxes = form.querySelectorAll("[data-auth-scope]");
+    var checked = Array.prototype.filter.call(scopeBoxes, function (b) { return b.checked; })
+      .map(function (b) { return b.value; });
+    var scopes = checked.length ? checked : (cfg.scopes || []);
+
+    var state = randomString(16);
+    var verifier = randomString(48);
+    sha256base64url(verifier).then(function (challenge) {
+      var pending = loadPkcePending();
+      pending[state] = {
+        schemeId: schemeId,
+        verifier: verifier,
+        tokenUrl: tokenUrl,
+        redirectUri: redirectUri,
+        scopes: scopes,
+        startedAt: Date.now(),
+      };
+      savePkcePending(pending);
+
+      var qs = new URLSearchParams({
+        response_type: "code",
+        client_id: cfg.clientId,
+        redirect_uri: redirectUri,
+        state: state,
+        code_challenge: challenge,
+        code_challenge_method: "S256",
+      });
+      if (scopes.length) qs.set("scope", scopes.join(" "));
+      var separator = authUrl.indexOf("?") === -1 ? "?" : "&";
+      var url = authUrl + separator + qs.toString();
+      statusEl.textContent = "Opening IdP popup…";
+      var popup = window.open(url, "openapi-forge-auth", "popup,width=540,height=720");
+      if (!popup) {
+        statusEl.textContent =
+          "Popup blocked. Allow popups for this site and try again.";
+        return;
+      }
+    });
+  }
+
+  function exchangeAuthCode(schemeId, pending, code, statusEl) {
+    var cfg = OAUTH_CLIENTS[schemeId] || {};
+    var body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code: code,
+      redirect_uri: pending.redirectUri,
+      client_id: cfg.clientId,
+      code_verifier: pending.verifier,
+    });
+    var headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    // Confidential clients: include the secret via Basic auth — that's
+    // what Keycloak prefers for confidential clients.
+    if (cfg.clientSecret) {
+      headers["Authorization"] = "Basic " + btoa(cfg.clientId + ":" + cfg.clientSecret);
+    }
+    return fetch(pending.tokenUrl, {
+      method: "POST",
+      headers: headers,
+      body: body.toString(),
+      credentials: "omit",
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+        if (!resp.ok) {
+          var msg = "HTTP " + resp.status;
+          if (data && data.error) msg += " — " + data.error;
+          if (data && data.error_description) msg += ": " + data.error_description;
+          throw new Error(msg);
+        }
+        if (!data || !data.access_token) throw new Error("token response missing access_token");
+        setOAuthAuthCodeToken(schemeId, data.access_token, data.expires_in || null, data.refresh_token || null);
+        if (statusEl) {
+          statusEl.textContent = "Signed in" +
+            (data.expires_in ? " — token expires in " + data.expires_in + "s." : ".");
+        }
+      });
+    });
+  }
+
+  function setOAuthAuthCodeToken(schemeId, accessToken, expiresIn, refreshToken) {
+    var expiresAt = expiresIn ? Date.now() + Math.max(0, expiresIn - 30) * 1000 : null;
+    authState.schemes[schemeId] = {
+      kind: "oauth2-authorization-code",
+      access_token: accessToken,
+      expires_at: expiresAt,
+      refresh_token: refreshToken,
+      // Per-audience exchanged tokens cache:
+      exchanged: {},
+    };
+    saveAuth(authState);
+    refreshAllTryItAuthIndicators();
+  }
+
+  function initPkceCallbackListener() {
+    window.addEventListener("message", function (ev) {
+      if (ev.origin !== window.location.origin) return;
+      var data = ev.data;
+      if (!data || data.source !== "openapi-forge-auth-callback") return;
+      var pending = loadPkcePending();
+      var entry = pending[data.state];
+      if (!entry) return;
+      delete pending[data.state];
+      savePkcePending(pending);
+      // Find the matching auth form by scheme id so we can report
+      // status into its UI; gracefully fall back to console if the
+      // form isn't on this page.
+      var form = document.querySelector('[data-auth-form][data-auth-kind="oauth2-authorization-code"][data-scheme-id="' + cssEscape(entry.schemeId) + '"]');
+      var statusEl = form && form.querySelector("[data-auth-status]");
+      if (!data.ok) {
+        var msg = "Login failed: " + (data.error || "unknown") +
+          (data.error_description ? " — " + data.error_description : "");
+        if (statusEl) statusEl.textContent = msg;
+        else console.error("[openapi-forge] " + msg);
+        return;
+      }
+      if (statusEl) statusEl.textContent = "Got code — exchanging for token…";
+      exchangeAuthCode(entry.schemeId, entry, data.code, statusEl).catch(function (err) {
+        if (statusEl) statusEl.textContent = err.message;
+        else console.error("[openapi-forge] " + err.message);
+      });
+    });
+  }
+
+  function initPkceForms() {
+    var forms = document.querySelectorAll('[data-auth-form][data-auth-kind="oauth2-authorization-code"]');
+    Array.prototype.forEach.call(forms, function (form) {
+      var schemeId = form.dataset.schemeId;
+      var status = form.querySelector("[data-auth-status]");
+      var loginBtn = form.querySelector("[data-auth-pkce-login]");
+      var redirectSlot = form.querySelector("[data-auth-pkce-redirect-uri]");
+      if (redirectSlot) redirectSlot.textContent = resolvedRedirectUri(schemeId);
+      var existing = authState.schemes[schemeId];
+      if (existing && existing.access_token) {
+        status.textContent = existing.expires_at
+          ? "Signed in. Token expires " + new Date(existing.expires_at).toLocaleTimeString() + "."
+          : "Signed in.";
+      }
+      if (loginBtn) {
+        loginBtn.addEventListener("click", function () { beginPkceLogin(form, schemeId, status); });
+      }
+    });
+  }
+
+  // ---- RFC 8693 token exchange ----
+
+  function tokenExchangeKey(audience, scope) {
+    return audience + "::" + (scope || "");
+  }
+
+  /// Get (or fetch + cache) an audience-scoped token for `schemeId`
+  /// using RFC 8693 subject-token exchange. The cache lives on the
+  /// scheme's auth-state record keyed by audience + scope.
+  function getExchangedToken(schemeId, audience, scopes) {
+    var s = authState.schemes[schemeId];
+    if (!s || !s.access_token) return Promise.reject(new Error("not signed in"));
+    s.exchanged = s.exchanged || {};
+    var scopeStr = (scopes || []).join(" ");
+    var key = tokenExchangeKey(audience, scopeStr);
+    var cached = s.exchanged[key];
+    if (cached && (!cached.expires_at || Date.now() < cached.expires_at)) {
+      return Promise.resolve(cached.access_token);
+    }
+
+    var form = document.querySelector('[data-auth-form][data-auth-kind="oauth2-authorization-code"][data-scheme-id="' + cssEscape(schemeId) + '"]');
+    var tokenUrl = form && form.dataset.tokenUrl;
+    if (!tokenUrl) return Promise.reject(new Error("scheme " + schemeId + " has no token URL on this page"));
+    var cfg = OAUTH_CLIENTS[schemeId] || {};
+    var body = new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: s.access_token,
+      subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      audience: audience,
+    });
+    if (scopeStr) body.set("scope", scopeStr);
+    var headers = { "Content-Type": "application/x-www-form-urlencoded" };
+    if (cfg.clientSecret) {
+      headers["Authorization"] = "Basic " + btoa(cfg.clientId + ":" + cfg.clientSecret);
+    } else {
+      body.set("client_id", cfg.clientId);
+    }
+    return fetch(tokenUrl, {
+      method: "POST",
+      headers: headers,
+      body: body.toString(),
+      credentials: "omit",
+    }).then(function (resp) {
+      return resp.text().then(function (text) {
+        var data;
+        try { data = JSON.parse(text); } catch (e) { data = null; }
+        if (!resp.ok) {
+          var msg = "token-exchange HTTP " + resp.status;
+          if (data && data.error) msg += " — " + data.error;
+          if (data && data.error_description) msg += ": " + data.error_description;
+          throw new Error(msg);
+        }
+        if (!data || !data.access_token) throw new Error("exchange response missing access_token");
+        var expiresAt = data.expires_in ? Date.now() + Math.max(0, data.expires_in - 30) * 1000 : null;
+        s.exchanged[key] = { access_token: data.access_token, expires_at: expiresAt };
+        saveAuth(authState);
+        return data.access_token;
+      });
+    });
+  }
+
   function requestClientCredentialsToken(schemeId, tokenUrl, clientId, clientSecret, scopes, statusEl) {
     if (!tokenUrl || !clientId || !clientSecret) {
       statusEl.textContent = "Missing client id / secret / token URL.";
@@ -439,18 +711,41 @@
     Array.prototype.forEach.call(inputs, function (i) {
       if (i.value !== "") h[i.dataset.name] = i.value;
     });
-    // Auth: if the op declares security, attach Authorization from
-    // the first satisfied scheme. Param-supplied Authorization always
-    // wins, so users can manually override.
-    if (!h["Authorization"]) {
-      var pills = form.querySelectorAll("[data-required-scheme]");
-      for (var i = 0; i < pills.length; i++) {
-        var schemeId = pills[i].dataset.requiredScheme;
-        var header = authHeaderFor(schemeId);
-        if (header) { h["Authorization"] = header; break; }
+    return h;
+  }
+
+  /// Returns a Promise that resolves with the Authorization value to
+  /// attach (or null when there's nothing to attach). Handles the
+  /// RFC 8693 token-exchange case asynchronously by swapping the
+  /// signed-in subject token for an audience-scoped token whose
+  /// audience is derived from the operation's path-param input.
+  function resolveAuthHeader(form) {
+    // Manual override always wins. Caller checks before us.
+    var txSchemeId = form.dataset.txSchemeId;
+    if (txSchemeId && schemeSatisfied(txSchemeId)) {
+      var placeholder = form.dataset.txPlaceholder;
+      var template = form.dataset.txAudienceTemplate;
+      var extra = (form.dataset.txExtraScope || "").trim().split(/\s+/).filter(Boolean);
+      var pathInput = form.querySelector('[data-tryit-param][data-location="path"][data-name="' + cssEscape(placeholder) + '"]');
+      if (!pathInput || !pathInput.value) {
+        // Without a path-param value we can't substitute; fall back
+        // to the bare subject token (caller's headers gets the raw
+        // one below).
+      } else {
+        var audience = template.replace("{" + placeholder + "}", pathInput.value);
+        return getExchangedToken(txSchemeId, audience, extra).then(function (tok) {
+          return "Bearer " + tok;
+        });
       }
     }
-    return h;
+    // Default: first satisfied declared scheme on the op.
+    var pills = form.querySelectorAll("[data-required-scheme]");
+    for (var i = 0; i < pills.length; i++) {
+      var schemeId = pills[i].dataset.requiredScheme;
+      var header = authHeaderFor(schemeId);
+      if (header) return Promise.resolve(header);
+    }
+    return Promise.resolve(null);
   }
 
   /// Update the green/red pill next to each declared scheme on a
@@ -519,7 +814,16 @@
     btn.disabled = true;
     statusOut.textContent = "sending…";
     var started = performance.now();
-    fetch(url, { method: method, headers: headers, body: body, credentials: "omit" })
+    // Resolve Authorization async (token-exchange when applicable),
+    // user-supplied `Authorization` header always wins.
+    var authPromise = headers["Authorization"]
+      ? Promise.resolve(null)
+      : resolveAuthHeader(form);
+    authPromise
+      .then(function (auth) {
+        if (auth && !headers["Authorization"]) headers["Authorization"] = auth;
+        return fetch(url, { method: method, headers: headers, body: body, credentials: "omit" });
+      })
       .then(function (resp) {
         var duration = Math.round(performance.now() - started);
         statusOut.textContent = "";
@@ -616,6 +920,8 @@
     initSidebarOnPath();
     initCopyButtons();
     initAuthForms();
+    initPkceForms();
+    initPkceCallbackListener();
     initTryIt();
     refreshAllTryItAuthIndicators();
   });

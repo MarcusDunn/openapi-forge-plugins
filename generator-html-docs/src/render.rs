@@ -117,6 +117,11 @@ pub struct ChromeCtx<'a> {
     /// Slim views fed to the header server picker. Stored on chrome so
     /// every page can render the picker without re-walking the IR.
     pub pickable_servers: Vec<PickableServer>,
+    /// JSON-encoded OAuth-client config keyed by scheme id, emitted
+    /// once per page in a `<meta>` tag so app.js can read it
+    /// synchronously at boot. Empty `{}` when no oauth client is
+    /// configured.
+    pub oauth_client_config_json: String,
 }
 
 /// One entry in the header's server `<select>`. Stays lean: the full
@@ -161,6 +166,8 @@ impl<'a> ChromeCtx<'a> {
                     .unwrap_or_else(|| s.url.clone()),
             })
             .collect();
+        let oauth_client_config_json =
+            forge_plugin_sdk::serde_json::to_string(&cfg.oauth).unwrap_or_else(|_| "{}".into());
         Self {
             title,
             page_title,
@@ -176,6 +183,7 @@ impl<'a> ChromeCtx<'a> {
             api_version: spec.info.version.as_str(),
             nav,
             pickable_servers,
+            oauth_client_config_json,
         }
     }
 }
@@ -271,6 +279,18 @@ fn oauth2_flow_view(f: &OAuth2Flow) -> OAuth2FlowView {
     }
 }
 
+/// Parsed `x-token-exchange` extension on a security scheme. The
+/// generator-rust-clap plugin uses the same shape. Only one
+/// placeholder in `audience_template` is supported for now; that
+/// placeholder is a path-parameter name we substitute at request
+/// time from the operation's `path_params` inputs.
+#[derive(Serialize, Clone, Debug)]
+pub struct TokenExchangeView {
+    pub audience_template: String,
+    pub placeholder: String,
+    pub extra_scope: Vec<String>,
+}
+
 /// Tagged enum-style view of `SecuritySchemeKind` for templates. We
 /// keep the variant's payload on the view directly so the template
 /// doesn't have to switch on an inner sub-object.
@@ -289,10 +309,11 @@ pub struct SecuritySchemeView {
     pub bearer_format: Option<String>,
     pub oauth2_flows: Vec<OAuth2FlowView>,
     pub open_id_connect_url: Option<String>,
+    pub token_exchange: Option<TokenExchangeView>,
 }
 
 impl SecuritySchemeView {
-    fn from_scheme(asset_prefix: &str, s: &SecurityScheme) -> Self {
+    fn from_scheme(spec: &Ir, asset_prefix: &str, s: &SecurityScheme) -> Self {
         let mut view = SecuritySchemeView {
             id: s.id.clone(),
             kind: "",
@@ -304,6 +325,7 @@ impl SecuritySchemeView {
             bearer_format: None,
             oauth2_flows: Vec::new(),
             open_id_connect_url: None,
+            token_exchange: parse_token_exchange(spec, s),
         };
         match &s.kind {
             SecuritySchemeKind::ApiKey(ApiKeyScheme { name, location }) => {
@@ -332,6 +354,57 @@ impl SecuritySchemeView {
         }
         view
     }
+}
+
+/// Parse the `x-token-exchange` extension on a scheme. Same wire shape
+/// as `generator-rust-clap`'s `parse_token_exchange`:
+/// `{ "audience-template": "...", "scope": [...] }`.
+fn parse_token_exchange(spec: &Ir, s: &SecurityScheme) -> Option<TokenExchangeView> {
+    let (_, vref) = s.extensions.iter().find(|(k, _)| k == "x-token-exchange")?;
+    let json = values_ext::resolve_to_serde(&spec.values, *vref);
+    let obj = json.as_object()?;
+    let audience_template = obj.get("audience-template")?.as_str()?.to_string();
+    let placeholders = extract_template_placeholders(&audience_template);
+    if placeholders.len() != 1 {
+        // Multi-placeholder audience templates are out of scope for
+        // this milestone; the clap generator has the same restriction.
+        return None;
+    }
+    let placeholder = placeholders.into_iter().next().unwrap();
+    let extra_scope: Vec<String> = obj
+        .get("scope")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(TokenExchangeView {
+        audience_template,
+        placeholder,
+        extra_scope,
+    })
+}
+
+fn extract_template_placeholders(template: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut name = String::new();
+            for c2 in chars.by_ref() {
+                if c2 == '}' {
+                    break;
+                }
+                name.push(c2);
+            }
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
 }
 
 /// "Requires <X> with scopes [...]" — what's listed on an op page.
@@ -984,6 +1057,22 @@ pub struct OperationView {
     pub try_it_body_seed: Option<String>,
     /// Honor the `enableTryIt` config knob.
     pub try_it_enabled: bool,
+    /// When the op declares a security requirement on a scheme with an
+    /// `x-token-exchange` extension AND the op's path declares a param
+    /// matching the audience-template placeholder, the try-it form
+    /// will RFC-8693 the user's access token before sending.
+    pub token_exchange_marker: Option<OpTokenExchangeView>,
+}
+
+/// Per-op marker for the try-it form: which scheme to read the
+/// subject_token from, which path-param to substitute into the
+/// audience template, and the template itself.
+#[derive(Serialize, Clone, Debug)]
+pub struct OpTokenExchangeView {
+    pub scheme_id: String,
+    pub audience_template: String,
+    pub placeholder: String,
+    pub extra_scope: Vec<String>,
 }
 
 pub fn operation_view(
@@ -1046,7 +1135,39 @@ pub fn operation_view(
                 .iter()
                 .find_map(|c| first_example(spec, &c.examples).map(|ex| ex.raw))
         }),
+        token_exchange_marker: op_token_exchange_marker(spec, op),
     }
+}
+
+fn op_token_exchange_marker(spec: &Ir, op: &Operation) -> Option<OpTokenExchangeView> {
+    // Walk the op's declared security and find the first scheme with
+    // an x-token-exchange extension whose placeholder is satisfied by
+    // one of the op's path params (case-insensitive). Without a
+    // path-param match the exchange has nothing to substitute, so we
+    // skip — the bare scheme token will get sent unchanged.
+    for req in &op.security {
+        let Some(scheme) = spec.security_schemes.iter().find(|s| s.id == req.scheme_id) else {
+            continue;
+        };
+        let Some(ex) = parse_token_exchange(spec, scheme) else {
+            continue;
+        };
+        let normalized = ex.placeholder.to_lowercase();
+        let matches_path = op
+            .path_params
+            .iter()
+            .any(|p| p.name.to_lowercase() == normalized);
+        if !matches_path {
+            continue;
+        }
+        return Some(OpTokenExchangeView {
+            scheme_id: scheme.id.clone(),
+            audience_template: ex.audience_template,
+            placeholder: ex.placeholder,
+            extra_scope: ex.extra_scope,
+        });
+    }
+    None
 }
 
 pub fn find_tag<'a>(roots: &'a [crate::nav::NavTag], name: &str) -> Option<&'a crate::nav::NavTag> {
@@ -1738,7 +1859,7 @@ pub fn security_page(
     let schemes: Vec<SecuritySchemeView> = spec
         .security_schemes
         .iter()
-        .map(|s| SecuritySchemeView::from_scheme(&asset_prefix, s))
+        .map(|s| SecuritySchemeView::from_scheme(spec, &asset_prefix, s))
         .collect();
     let mut crumbs = crumbs_home(&asset_prefix);
     crumbs.push(Crumb {
