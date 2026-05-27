@@ -748,11 +748,7 @@ pub fn build_used_in_index(spec: &Ir) -> UsedInIndex {
     index
 }
 
-fn used_in_links(
-    spec: &Ir,
-    asset_prefix: &str,
-    op_ids: BTreeSet<&String>,
-) -> Vec<OperationLink> {
+fn used_in_links(spec: &Ir, asset_prefix: &str, op_ids: BTreeSet<&String>) -> Vec<OperationLink> {
     let mut out = Vec::new();
     for op in &spec.operations {
         if !op_ids.contains(&op.id) {
