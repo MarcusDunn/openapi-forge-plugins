@@ -21,6 +21,25 @@
       "type": "string",
       "minLength": 1,
       "description": "Site origin used to render absolute <link rel=\"canonical\"> hrefs. Optional; internal navigation always uses relative URLs."
+    },
+    "enableTryIt": {
+      "type": "boolean",
+      "description": "When true (default), each operation page renders an in-browser request builder. Disable for read-only static docs or when CORS makes the runtime call useless."
+    },
+    "oauth": {
+      "type": "object",
+      "description": "Per-scheme OAuth client configuration. Keys are security-scheme ids declared in the spec.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["clientId"],
+        "properties": {
+          "clientId":     { "type": "string", "minLength": 1, "description": "OAuth client_id registered with the IdP." },
+          "clientSecret": { "type": "string", "minLength": 1, "description": "Optional client_secret. Embedded in the generated site; only use for clients the IdP treats as confidential AND that you're OK exposing publicly." },
+          "scopes":       { "type": "array", "items": { "type": "string" }, "description": "Default scopes the security page's checkboxes preselect. Defaults to the spec-declared scopes." },
+          "redirectUri":  { "type": "string", "description": "Pre-registered redirect URI. Defaults to the auth/callback.html page on the docs origin." }
+        }
+      }
     }
   }
 }

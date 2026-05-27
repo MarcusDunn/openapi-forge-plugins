@@ -8,6 +8,12 @@
       <code class="path">{% for seg in op.path_segments -%}
         {% if seg.is_param %}<span class="path-param">{{ seg.text }}</span>{% else %}{{ seg.text }}{% endif %}
       {%- endfor %}</code>
+      <button
+        type="button"
+        class="copy-btn"
+        data-copy-btn
+        data-copy-endpoint="{{ op.path_template }}"
+        aria-label="Copy endpoint URL">copy</button>
     </p>
     {% if op.tag_links %}
     <p class="op-tags">
@@ -29,6 +35,9 @@
   </section>
   {% endif %}
 
+  {% set security = op.security %}
+  {% include "partials/_auth_required.html.j2" %}
+
   {% if op.parameters %}
   <section aria-labelledby="parameters-heading">
     <h2 id="parameters-heading">Parameters</h2>
@@ -45,8 +54,16 @@
     <article data-media-type="{{ c.media_type }}">
       <h3><code>{{ c.media_type }}</code></h3>
       <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
-      {% if c.example_json %}
-        {% set example = c.example_json %}
+      {% set discriminator = c.discriminator %}
+      {% include "partials/_discriminator.html.j2" %}
+      {% if c.inline_type %}
+      <details class="inline-nested">
+        <summary>structure</summary>
+        {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+      </details>
+      {% endif %}
+      {% if c.example %}
+        {% set example = c.example %}
         {% include "partials/_example.html.j2" %}
       {% endif %}
     </article>
@@ -54,11 +71,13 @@
   </section>
   {% endif %}
 
+  {% include "partials/_tryit.html.j2" %}
+
   <section aria-labelledby="responses-heading">
     <h2 id="responses-heading">Responses</h2>
     {% if op.responses %}
       {% for r in op.responses %}
-      <article data-status="{{ r.status }}" class="response">
+      <article id="response-{{ r.status }}" data-status="{{ r.status }}" class="response">
         <h3>
           <code class="status-badge {{ r.status_class }}">{{ r.status }}</code>
           {% if r.summary %}{{ r.summary }}{% endif %}
@@ -74,7 +93,15 @@
               <small>({% if h.required %}required{% else %}optional{% endif %}{% if h.deprecated %}, deprecated{% endif %})</small>
               {% set t = h.type %}{% include "partials/_typeref.html.j2" %}
             </dt>
-            <dd>{% if h.description_html %}{{ h.description_html|safe }}{% endif %}</dd>
+            <dd>
+              {% if h.description_html %}{{ h.description_html|safe }}{% endif %}
+              {% if h.inline_type %}
+              <details class="inline-nested">
+                <summary>structure</summary>
+                {% set inline = h.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+              </details>
+              {% endif %}
+            </dd>
             {% endfor %}
           </dl>
         </section>
@@ -86,8 +113,16 @@
           <article data-media-type="{{ c.media_type }}">
             <h5><code>{{ c.media_type }}</code></h5>
             <p>Type: {% set t = c.type %}{% include "partials/_typeref.html.j2" %}</p>
-            {% if c.example_json %}
-              {% set example = c.example_json %}
+            {% set discriminator = c.discriminator %}
+            {% include "partials/_discriminator.html.j2" %}
+            {% if c.inline_type %}
+            <details class="inline-nested">
+              <summary>structure</summary>
+              {% set inline = c.inline_type %}{% include "partials/_inline_schema.html.j2" %}
+            </details>
+            {% endif %}
+            {% if c.example %}
+              {% set example = c.example %}
               {% include "partials/_example.html.j2" %}
             {% endif %}
           </article>

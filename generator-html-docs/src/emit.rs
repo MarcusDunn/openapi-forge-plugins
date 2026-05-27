@@ -26,6 +26,20 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
         Err(e) => return rejection("index.html", e, diagnostics),
     }
 
+    if !spec.security_schemes.is_empty() {
+        match render::security_page(&env, spec, cfg, &nav) {
+            Ok(page) => files.push(OutputFile::text(page.path, page.html)),
+            Err(e) => return rejection("security/index.html", e, diagnostics),
+        }
+    }
+
+    if cfg.include_schemas {
+        match render::schemas_index_page(&env, spec, cfg, &nav) {
+            Ok(page) => files.push(OutputFile::text(page.path, page.html)),
+            Err(e) => return rejection("schemas/index.html", e, diagnostics),
+        }
+    }
+
     for tag in nav.walk() {
         match render::tag_page(&env, spec, cfg, &nav, tag) {
             Ok(page) => files.push(OutputFile::text(page.path, page.html)),
@@ -41,6 +55,12 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
     }
 
     if cfg.include_schemas {
+        // Synthetic IR types (`*_property_*`, `*_param_*`, etc.) do
+        // NOT get their own page. They're inlined under the property /
+        // parameter / response they belong to on the parent's page —
+        // see `render::inline_schema_view`. Emitting one page per
+        // synthetic blew the wasm hostcall fuel budget on real-world
+        // specs (DialAI: ~3000 synthetic types).
         for t in &spec.types {
             if t.id == forge_plugin_sdk::ir::NULL_ID {
                 continue;
@@ -62,6 +82,12 @@ pub fn all(spec: &Ir, cfg: &Config) -> Outcome {
     files.push(OutputFile::text(
         "_static/app.js",
         include_str!("../assets/app.js"),
+    ));
+    // The OAuth Authorization-Code popup redirects here. It's the
+    // same on every site, so we just drop a verbatim static page.
+    files.push(OutputFile::text(
+        "auth/callback.html",
+        include_str!("../assets/auth_callback.html"),
     ));
 
     Outcome::Generated(GenerationOutput { files, diagnostics })

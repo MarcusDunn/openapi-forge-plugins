@@ -1,18 +1,22 @@
 {% if params %}
 <dl class="params">
   {% for p in params %}
-  <dt>
+  <dt id="param-{{ p.location }}-{{ p.name }}">
     <code class="param-name">{{ p.name }}</code>
     <small class="param-meta">({{ p.location }}{% if p.required %}, required{% endif %}{% if p.deprecated %}, deprecated{% endif %})</small>
     {% set t = p.type %}{% include "partials/_typeref.html.j2" %}
   </dt>
   <dd>
     {% if p.description_html %}{{ p.description_html|safe }}{% endif %}
-    {% if p.example_json %}
-    <details class="example">
-      <summary>Example</summary>
-      <pre><code class="language-json">{{ p.example_json }}</code></pre>
+    {% if p.inline_type %}
+    <details class="inline-nested">
+      <summary>structure</summary>
+      {% set inline = p.inline_type %}{% include "partials/_inline_schema.html.j2" %}
     </details>
+    {% endif %}
+    {% if p.example %}
+      {% set example = p.example %}
+      {% include "partials/_example.html.j2" %}
     {% endif %}
   </dd>
   {% endfor %}

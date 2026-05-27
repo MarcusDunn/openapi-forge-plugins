@@ -57,6 +57,12 @@ pub fn schema_page_path(schema_id: &str) -> String {
     format!("schemas/{}.html", schema_id)
 }
 
+/// Output path for the security catalogue page.
+pub const SECURITY_INDEX: &str = "security/index.html";
+
+/// Output path for the schemas index page.
+pub const SCHEMAS_INDEX: &str = "schemas/index.html";
+
 /// `../` repeated to walk up to the site root from `path`. The path
 /// is the file's relative location inside `out/`.
 pub fn asset_prefix(path: &str) -> String {

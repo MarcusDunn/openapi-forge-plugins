@@ -1,0 +1,105 @@
+{% if op.try_it_enabled %}
+<section
+  aria-labelledby="tryit-heading"
+  class="try-it"
+  data-tryit-form
+  data-method="{{ op.method }}"
+  data-path-template="{{ op.path_template }}"
+  data-operation-id="{{ op.id }}"
+  {% if op.token_exchange_marker %}
+  data-tx-scheme-id="{{ op.token_exchange_marker.scheme_id }}"
+  data-tx-audience-template="{{ op.token_exchange_marker.audience_template }}"
+  data-tx-placeholder="{{ op.token_exchange_marker.placeholder }}"
+  data-tx-extra-scope="{{ op.token_exchange_marker.extra_scope|join(' ') }}"
+  {% endif %}>
+  <h2 id="tryit-heading">Try it</h2>
+  <p class="try-it__server-line">
+    Request will be sent to
+    <output
+      data-tryit-effective-url
+      aria-live="polite"
+      title="Effective URL based on the picked server and your inputs"></output>
+  </p>
+
+  {% if op.parameters %}
+  <fieldset class="try-it__fieldset">
+    <legend>Parameters</legend>
+    <dl class="try-it__params">
+      {% for p in op.parameters %}
+      <dt>
+        <code>{{ p.name }}</code>
+        <small>({{ p.location }}{% if p.required %}, required{% endif %})</small>
+      </dt>
+      <dd>
+        <input
+          type="text"
+          data-tryit-param
+          data-name="{{ p.name }}"
+          data-location="{{ p.location }}"
+          {% if p.required %}required{% endif %}
+          {% if p.example %}value="{{ p.example.raw }}"{% endif %}
+          autocomplete="off">
+      </dd>
+      {% endfor %}
+    </dl>
+  </fieldset>
+  {% endif %}
+
+  {% if op.request_body %}
+  <fieldset class="try-it__fieldset">
+    <legend>Request body{% if op.request_body.required %} <small>(required)</small>{% endif %}</legend>
+    {% if op.request_body.content %}
+    <label class="try-it__media-type">
+      Content-Type:
+      <select data-tryit-content-type>
+        {% for c in op.request_body.content %}
+        <option value="{{ c.media_type }}">{{ c.media_type }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <textarea
+      data-tryit-body
+      rows="8"
+      spellcheck="false"
+      placeholder="Request payload"
+      autocomplete="off">{{ op.try_it_body_seed if op.try_it_body_seed else "" }}</textarea>
+  </fieldset>
+  {% endif %}
+
+  {% if op.security %}
+  <p class="try-it__auth-status" data-tryit-auth-indicator>
+    {% for alt in op.security.alternatives %}
+      {% for req in alt %}
+        <span class="auth-pill" data-required-scheme="{{ req.scheme_id }}">
+          <code>{{ req.scheme_id }}</code>
+          <span class="auth-pill__state" data-auth-state>—</span>
+        </span>
+      {% endfor %}
+    {% endfor %}
+  </p>
+  {% endif %}
+
+  <div class="try-it__actions">
+    <button type="button" data-tryit-send class="try-it__send">Send request</button>
+    <span data-tryit-status role="status" aria-live="polite"></span>
+  </div>
+
+  <section class="try-it__response" data-tryit-response hidden aria-labelledby="tryit-response-heading">
+    <h3 id="tryit-response-heading">Response</h3>
+    <p class="try-it__response-status">
+      <code class="status-badge" data-tryit-response-status></code>
+      <span data-tryit-response-status-text></span>
+      <span class="try-it__response-time" data-tryit-response-duration></span>
+    </p>
+    <details class="try-it__response-headers" data-tryit-response-headers-block>
+      <summary>Headers</summary>
+      <dl data-tryit-response-headers></dl>
+    </details>
+    <div data-tryit-response-body-wrap>
+      <h4>Body</h4>
+      <pre><code data-tryit-response-body></code></pre>
+    </div>
+  </section>
+</section>
+{% endif %}

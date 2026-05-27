@@ -1,0 +1,17 @@
+{% if discriminator %}
+<aside class="discriminator" data-discriminator-property="{{ discriminator.property_name }}">
+  <p>
+    <strong>Discriminator:</strong>
+    variants are distinguished by the
+    <code>{{ discriminator.property_name }}</code> field.
+  </p>
+  {% if discriminator.has_mapping %}
+  <dl class="discriminator-mapping">
+    {% for entry in discriminator.mapping %}
+    <dt><code>{{ discriminator.property_name }}: "{{ entry.tag }}"</code></dt>
+    <dd>{% set t = entry.type %}{% include "partials/_typeref.html.j2" %}</dd>
+    {% endfor %}
+  </dl>
+  {% endif %}
+</aside>
+{% endif %}
