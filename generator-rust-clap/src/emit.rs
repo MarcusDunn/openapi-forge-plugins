@@ -600,14 +600,14 @@ fn emit_cargo_toml(pkg_name: &str, bin_name: &str, oauth: bool) -> String {
     // ride on reqwest. Switching auth.rs to hyper-util is a separate
     // refactor; for now we accept the extra dep when OAuth is opted in.
     let oauth_block = if oauth {
-        r#"reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-sha2 = "0.10"
+        r#"reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls"] }
+sha2 = "0.11"
 base64 = "0.22"
-rand = "0.8"
+rand = "0.10"
 webbrowser = "1"
 directories = "6"
-toml = "0.8"
-dialoguer = "0.11"
+toml = "1"
+dialoguer = "0.12"
 urlencoding = "2"
 "#
     } else {

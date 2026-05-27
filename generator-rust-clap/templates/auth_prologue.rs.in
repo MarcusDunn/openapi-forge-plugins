@@ -10,7 +10,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::{STANDARD as B64_STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
-use rand::RngCore;
+use rand::rand_core::Rng;
 use reqwest::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -218,13 +218,13 @@ fn now_secs() -> u64 {
 
 fn random_verifier() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn random_state() -> String {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
