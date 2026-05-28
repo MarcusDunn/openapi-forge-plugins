@@ -95,6 +95,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "generator-kotlin-types"
+version = "0.1.10"
+dependencies = [
+ "forge-plugin-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "generator-rust-clap"
 version = "0.1.10"
 dependencies = [

@@ -1,0 +1,244 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Kotlin Petstore",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "responses": {
+          "200": {
+            "description": "A page of pets",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Pets" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CustomerId": {
+        "type": "string",
+        "description": "Unconstrained string alias — every named primitive becomes a wrapper.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.CustomerId", "module": "pet" }
+      },
+      "AccountNumber": {
+        "type": "string",
+        "pattern": "\\d{8}",
+        "x-kotlin-source": { "class": "ca.dialai.pet.AccountNumber", "module": "pet" }
+      },
+      "Email": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 254,
+        "pattern": "^.+@.+$",
+        "x-kotlin-source": { "class": "ca.dialai.pet.Email", "module": "pet" }
+      },
+      "Quantity": {
+        "type": "integer",
+        "format": "int32",
+        "minimum": 1,
+        "maximum": 100,
+        "x-kotlin-source": { "class": "ca.dialai.pet.Quantity", "module": "pet" }
+      },
+      "CreatedAt": {
+        "type": "string",
+        "format": "date-time",
+        "x-kotlin-source": { "class": "ca.dialai.pet.CreatedAt", "module": "pet" }
+      },
+      "EventTimestamp": {
+        "type": "string",
+        "format": "instant",
+        "description": "Tests the `format: instant` path — wraps java.time.Instant instead of OffsetDateTime.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.EventTimestamp", "module": "pet" }
+      },
+      "Status": {
+        "type": "string",
+        "enum": ["active", "archived", "pending_review"],
+        "x-kotlin-source": { "class": "ca.dialai.pet.Status", "module": "pet" }
+      },
+      "Pet": {
+        "type": "object",
+        "required": ["id", "owner", "status"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/CustomerId" },
+          "owner": { "$ref": "#/components/schemas/Owner" },
+          "owner_email": { "$ref": "#/components/schemas/Email" },
+          "quantity": { "$ref": "#/components/schemas/Quantity" },
+          "status": { "$ref": "#/components/schemas/Status" },
+          "created_at": { "$ref": "#/components/schemas/CreatedAt" },
+          "animal": { "$ref": "#/components/schemas/Animal" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Pet", "module": "pet" }
+      },
+      "Owner": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "$ref": "#/components/schemas/CustomerId" },
+          "name": { "type": "string" }
+        },
+        "description": "Pet owner. Lives in a different Kotlin package than Pet to exercise cross-package imports.",
+        "x-kotlin-source": { "class": "ca.dialai.account.Owner", "module": "account" }
+      },
+      "Pets": {
+        "type": "array",
+        "items": { "$ref": "#/components/schemas/Pet" },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Pets", "module": "pet" }
+      },
+      "Animal": {
+        "type": "object",
+        "oneOf": [
+          { "$ref": "#/components/schemas/Dog" },
+          { "$ref": "#/components/schemas/Cat" }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "dog": "#/components/schemas/Dog",
+            "cat": "#/components/schemas/Cat"
+          }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Animal", "module": "pet" }
+      },
+      "Dog": {
+        "type": "object",
+        "required": ["type", "bark_volume"],
+        "properties": {
+          "type": { "type": "string", "enum": ["dog"] },
+          "bark_volume": { "type": "integer", "format": "int32" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Dog", "module": "pet" }
+      },
+      "Cat": {
+        "type": "object",
+        "required": ["type", "purr_frequency"],
+        "properties": {
+          "type": { "type": "string", "enum": ["cat"] },
+          "purr_frequency": { "type": "number", "format": "double" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Cat", "module": "pet" }
+      },
+      "Shape": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/Circle" },
+          { "$ref": "#/components/schemas/Square" }
+        ],
+        "x-kotlin-source": { "class": "ca.dialai.pet.Shape", "module": "pet" }
+      },
+      "Circle": {
+        "type": "object",
+        "required": ["kind", "radius"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["circle"] },
+          "radius": { "type": "number", "format": "double" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Circle", "module": "pet" }
+      },
+      "Square": {
+        "type": "object",
+        "required": ["kind", "side"],
+        "properties": {
+          "kind": { "type": "string", "enum": ["square"] },
+          "side": { "type": "number", "format": "double" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.Square", "module": "pet" }
+      },
+      "AuditBase": {
+        "type": "object",
+        "required": ["id", "createdAt"],
+        "properties": {
+          "id": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "thumbnail": { "type": "string", "format": "byte", "description": "Inline byte property — should serialize as a Base64 JSON string." }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.AuditBase", "module": "pet" }
+      },
+      "Avatar": {
+        "type": "string",
+        "format": "byte",
+        "description": "Named byte primitive — ByteArray wrapper with Base64 serializer.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.Avatar", "module": "pet" }
+      },
+      "AuditedNote": {
+        "allOf": [
+          { "$ref": "#/components/schemas/AuditBase" },
+          {
+            "type": "object",
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string" },
+              "tag": { "type": "string" }
+            }
+          }
+        ],
+        "description": "Probes whether the forge IR flattens allOf into a single object before the generator sees it.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.AuditedNote", "module": "pet" }
+      },
+      "JsonValue": {
+        "oneOf": [
+          { "type": "string" },
+          { "type": "number" },
+          { "type": "boolean" },
+          { "type": "array", "items": { "$ref": "#/components/schemas/JsonValue" } },
+          { "type": "object", "additionalProperties": { "$ref": "#/components/schemas/JsonValue" } }
+        ],
+        "description": "Recursive untagged union — the JsonValue shape with no discriminator and no shared const property. Should typealias to JsonElement; the recursive references must not blow up the renderer.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.JsonValue", "module": "pet" }
+      },
+      "AgentContent": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/AgentTextContent" }
+        ],
+        "description": "Single-variant untagged union — should become a sealed interface that delegates to its sole member.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.AgentContent", "module": "pet" }
+      },
+      "AgentTextContent": {
+        "type": "object",
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" }
+        },
+        "x-kotlin-source": { "class": "ca.dialai.pet.AgentTextContent", "module": "pet" }
+      },
+      "PublicHealthcheck": {
+        "type": "object",
+        "required": ["ok"],
+        "properties": {
+          "ok": { "type": "boolean" }
+        },
+        "description": "Public override — should emit `data class` (no `internal` modifier) because x-kotlin-visibility=public.",
+        "x-kotlin-source": { "class": "ca.dialai.pet.PublicHealthcheck", "module": "pet" },
+        "x-kotlin-visibility": "public"
+      },
+      "FunctionCallSuccess": {
+        "type": "object",
+        "required": ["response"],
+        "properties": {
+          "response": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "message": { "type": "string" },
+              "audit": {
+                "type": "object",
+                "properties": {
+                  "level": { "type": "string", "enum": ["info", "warn", "error"] }
+                }
+              }
+            },
+            "description": "Inline object — should promote to a nested class `Response` inside FunctionCallSuccess."
+          }
+        },
+        "description": "Probes the nested-class promotion path for inline objects (and a nested-nested case via `audit`).",
+        "x-kotlin-source": { "class": "ca.dialai.pet.FunctionCallSuccess", "module": "pet" }
+      }
+    }
+  }
+}

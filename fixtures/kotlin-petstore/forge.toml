@@ -1,0 +1,9 @@
+[input]
+spec = "spec.json"
+
+[generator]
+wasm = "../../target/wasm32-wasip2/release/generator_kotlin_types.wasm"
+config = { outputRoot = "." }
+
+[output]
+dir = "out"

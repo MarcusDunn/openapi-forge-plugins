@@ -8,6 +8,7 @@ members = [
     "generator-rust-tower",
     "generator-rust-clap",
     "generator-html-docs",
+    "generator-kotlin-types",
 ]
 # The clap fixture's `out/` is a complete CLI crate (Cargo.toml + src/main.rs
 # emitted by `forge generate`). Without exclusion, cargo refuses to build it
@@ -18,6 +19,7 @@ members = [
 exclude = [
     "fixtures/clap-petstore/out",
     "fixtures/html-petstore/out",
+    "fixtures/kotlin-petstore/out",
 ]
 
 # Plugin crates ship as public OCI WASM components at

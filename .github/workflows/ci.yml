@@ -120,6 +120,18 @@ jobs:
             plugins: "generator-html-docs"
             work_dir: compile-test
             cargo_cmd: test --no-fail-fast
+          # generator-kotlin-types emits kotlinx.serialization data
+          # classes + values4k value-object wrappers for an OpenAPI
+          # spec, driven by `x-kotlin-source` annotations. The
+          # compile-test crate asserts the generated `.kt` files match
+          # the documented patterns: values4k wrapper shape, custom
+          # KSerializer round-trip, explicit + inferred sealed-
+          # interface discriminators, cross-package imports, snake_case
+          # → @SerialName, java.time + inlined serializer.
+          - fixture: kotlin-petstore
+            plugins: "generator-kotlin-types"
+            work_dir: compile-test
+            cargo_cmd: test --no-fail-fast
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
