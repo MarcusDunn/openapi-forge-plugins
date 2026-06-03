@@ -101,6 +101,68 @@ fn is_clap_native(spec: &Ir, type_ref: &str) -> bool {
         .is_some_and(|t| matches!(t.definition, TypeDef::Primitive(_)))
 }
 
+/// The clap `default_value` string for a parameter whose schema declares
+/// a JSON Schema `default`, or `None` when there is none (or it isn't a
+/// scalar). clap's `default_value` is a single string the value-parser
+/// re-parses, so only string / number / bool defaults are representable
+/// here; compound (`array` / `object`) and `null` defaults are skipped
+/// — an array default would need clap's `default_values`, and the CLI's
+/// `serde_json`-decode dispatch already round-trips the scalar form
+/// (`"available"` → `PetStatus::Available`, `"10"` → `10i32`).
+fn param_default_value(spec: &Ir, type_ref: &str) -> Option<String> {
+    let named = spec.types.iter().find(|t| t.id == type_ref)?;
+    let dref = named.default?;
+    scalar_default_string(&values_ext::resolve_to_serde(&spec.values, dref))
+}
+
+fn scalar_default_string(v: &forge_plugin_sdk::serde_json::Value) -> Option<String> {
+    use forge_plugin_sdk::serde_json::Value;
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+/// The clap `add = ArgValueCandidates::new(...)` fragment that offers a
+/// string enum's values as dynamic shell-completion candidates (so
+/// `--status <TAB>` lists the spec's allowed values), or `None` when
+/// `type_ref` isn't a string enum (or a one-level array of one). This is
+/// completion *only* — it does not constrain the value, so the
+/// dispatch-time `serde_json` decode remains the single point that
+/// enforces enum membership, and the emitted surface still matches what
+/// the spec's schema permits.
+///
+/// Relies on the binary's `CompleteEnv` dynamic-completion dispatch
+/// (emitted unconditionally from `emit_main_rs`); the `clap_complete`
+/// `unstable-dynamic` feature is enabled in the generated `Cargo.toml`.
+fn enum_completion_attr(spec: &Ir, type_ref: &str) -> Option<TokenStream> {
+    let values = string_enum_values(spec, type_ref)?;
+    if values.is_empty() {
+        return None;
+    }
+    let candidates = values
+        .iter()
+        .map(|v| quote!(clap_complete::CompletionCandidate::new(#v)));
+    Some(quote! {
+        add = clap_complete::ArgValueCandidates::new(|| vec![#(#candidates),*])
+    })
+}
+
+/// A string enum's values for `type_ref`, unwrapping a single array
+/// level so repeated query params (`--status a --status b`) complete
+/// each element. `None` for any type that isn't a string enum (or an
+/// array of one).
+fn string_enum_values(spec: &Ir, type_ref: &str) -> Option<Vec<String>> {
+    let named = spec.types.iter().find(|t| t.id == type_ref)?;
+    match &named.definition {
+        TypeDef::EnumString(e) => Some(e.values.iter().map(|v| v.value.clone()).collect()),
+        TypeDef::Array(a) => string_enum_values(spec, &a.items),
+        _ => None,
+    }
+}
+
 /// Emit the expression that converts a CLI struct field into the value
 /// the tower request struct expects. Encapsulates the four-axis cross
 /// product of (required × relax-active × native × array).
@@ -773,15 +835,15 @@ fn emit_main_rs(
     };
 
     // main() body — assembled from a sequence of optional blocks.
-    let completion_dispatch = if oauth_active {
-        quote! {
-            // Dynamic shell-completion dispatch. When `COMPLETE` env is set
-            // (e.g. by `eval "$(COMPLETE=bash <bin>)"` in shell init), this
-            // prints completions and exits before any normal CLI handling.
-            clap_complete::CompleteEnv::with_factory(Cli::command).complete();
-        }
-    } else {
-        quote!()
+    // Dynamic shell-completion dispatch. When `COMPLETE` env is set
+    // (e.g. by `eval "$(COMPLETE=bash <bin>)"` in shell init), this
+    // prints completions and exits before any normal CLI handling.
+    // Emitted unconditionally so enum-valued query params can surface
+    // their `ArgValueCandidates` (`--status <TAB>` → the spec's enum
+    // values) regardless of whether OAuth is configured — pre-#defaults
+    // this only ran on OAuth-active CLIs for `--profile` completion.
+    let completion_dispatch = quote! {
+        clap_complete::CompleteEnv::with_factory(Cli::command).complete();
     };
     let completion_subcommand = quote! {
         if let Cmd::Completion { shell } = cli.cmd {
@@ -1474,6 +1536,11 @@ fn render_op_match_arm(
         }
         let shape = cli_arg_shape(spec, &p.r#type);
         let kebab = kebab_case(&p.name);
+        // A scalar schema `default` makes clap always supply a value, so
+        // the field is bare `T` (no `Option` / unwrap). Mirrors the
+        // `has_default` branch in `field_for_param` — the two must agree
+        // on the field's `Option`-ness or the initializer won't typecheck.
+        let has_default = param_default_value(spec, &p.r#type).is_some();
         // Strip any `r#` prefix when synthesizing local-binding names
         // (`__opt_type`, `__inner_type`, …) — the raw-ident escaping is
         // only needed for the outermost field name. Without this we'd
@@ -1492,12 +1559,17 @@ fn render_op_match_arm(
                     #field_ident: if #field_ident.is_empty() { None } else { Some(#val) }
                 });
             }
-        } else if (is_path || p.required) && !relax_active {
-            // Required, no relax — CLI field is the typed value directly.
+        } else if (is_path || p.required) && (!relax_active || has_default) {
+            // CLI field is the typed value directly. Two ways to reach
+            // here: a required param with no relax (clap always demands
+            // it), or any param carrying a schema `default` (clap fills
+            // the value when omitted, so the relax `required_unless` gate
+            // is dropped in `field_for_param` and the field stays bare).
+            // Either way the value is always present, so no unwrap.
             inits.push(quote!(#field_ident: #val));
         } else if p.required && relax_active {
-            // Required + relax — CLI field is `Option<typed>`; clap
-            // guarantees `Some` on the call branch.
+            // Required + relax, no default — CLI field is `Option<typed>`;
+            // clap guarantees `Some` on the call branch.
             let msg = if is_path {
                 format!("<{kebab}> required")
             } else {
@@ -2090,16 +2162,44 @@ fn collect_fields(spec: &Ir, op: &Operation, exclude_path_param: Option<&str>) -
         {
             continue;
         }
-        out.push(field_for_param(spec, p, FieldKind::Positional, &relax));
+        out.push(field_for_param(
+            spec,
+            p,
+            FieldKind::Positional,
+            &relax,
+            /*enum_completion=*/ false,
+        ));
     }
     for p in &op.query_params {
-        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
+        // Enum-valued query params get `--name <TAB>` completion; see
+        // `enum_completion_attr`. Restricted to query params per the
+        // feature request (path / header / cookie completion is a
+        // straightforward follow-up — flip the flag at those call sites).
+        out.push(field_for_param(
+            spec,
+            p,
+            FieldKind::Flag,
+            &relax,
+            /*enum_completion=*/ true,
+        ));
     }
     for p in &op.header_params {
-        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
+        out.push(field_for_param(
+            spec,
+            p,
+            FieldKind::Flag,
+            &relax,
+            /*enum_completion=*/ false,
+        ));
     }
     for p in &op.cookie_params {
-        out.push(field_for_param(spec, p, FieldKind::Flag, &relax));
+        out.push(field_for_param(
+            spec,
+            p,
+            FieldKind::Flag,
+            &relax,
+            /*enum_completion=*/ false,
+        ));
     }
     if let Some(body) = &op.request_body {
         out.push(field_for_body(body, &relax));
@@ -2172,7 +2272,13 @@ enum FieldKind {
     Flag,
 }
 
-fn field_for_param(spec: &Ir, p: &Parameter, kind: FieldKind, relax: &[&str]) -> Field {
+fn field_for_param(
+    spec: &Ir,
+    p: &Parameter,
+    kind: FieldKind,
+    relax: &[&str],
+    enum_completion: bool,
+) -> Field {
     let field_ident = ident(&snake_case(&p.name));
     let kebab = kebab_case(&p.name);
     let relax_active = !relax.is_empty();
@@ -2180,44 +2286,81 @@ fn field_for_param(spec: &Ir, p: &Parameter, kind: FieldKind, relax: &[&str]) ->
     let shape = cli_arg_shape(spec, &p.r#type);
     let typed = &shape.cli_ty;
 
+    // A scalar schema `default` becomes a clap `default_value`. Its
+    // presence also makes the flag non-required — clap always supplies a
+    // value — so we drop the relax `required_unless_present_any` gate
+    // (it would be redundant) and keep the field bare `T`. The dispatch
+    // side (`push_param`) keys "bare vs Option" on the same
+    // `has_default` so the CLI field type and the request-struct
+    // initializer stay in lockstep.
+    let default_str = param_default_value(spec, &p.r#type);
+    let has_default = default_str.is_some();
+    let default_attr = default_str.map(|d| quote!(default_value = #d));
+
+    // Enum-valued (query) params get dynamic completion candidates.
+    let completion_attr = if enum_completion {
+        enum_completion_attr(spec, &p.r#type)
+    } else {
+        None
+    };
+
     // Arrays always render as `Vec<T>` regardless of `required` / relax:
     // clap interprets `Vec<T>` as "0+ occurrences"; missing-required
     // arrays are surfaced at dispatch time, not at parse time. This
     // mirrors how the tower request struct declares them (`Vec<T>`,
-    // unconditionally) and matches the OpenAPI 3 default.
-    let (ty, arg_attr) = if shape.is_array {
-        let attr = match kind {
-            FieldKind::Positional => quote!(),
-            FieldKind::Flag => quote!(long = #kebab),
-        };
-        (typed.clone(), Some(attr))
+    // unconditionally) and matches the OpenAPI 3 default. Scalar
+    // defaults don't apply to arrays (see `param_default_value`).
+    let (ty, mut attr_parts): (TokenStream, Vec<TokenStream>) = if shape.is_array {
+        let mut parts = Vec::new();
+        if let FieldKind::Flag = kind {
+            parts.push(quote!(long = #kebab));
+        }
+        (typed.clone(), parts)
     } else {
         match (kind, p.required) {
             (FieldKind::Positional, _) => {
-                if relax_active {
+                if relax_active && !has_default {
                     (
                         quote!(Option<#typed>),
-                        Some(quote!(required_unless_present_any = [#(#relax_lits),*])),
+                        vec![quote!(required_unless_present_any = [#(#relax_lits),*])],
                     )
                 } else {
-                    (typed.clone(), None)
+                    (typed.clone(), Vec::new())
                 }
             }
             (FieldKind::Flag, true) => {
-                if relax_active {
+                if relax_active && !has_default {
                     (
                         quote!(Option<#typed>),
-                        Some(
-                            quote!(long = #kebab, required_unless_present_any = [#(#relax_lits),*]),
-                        ),
+                        vec![
+                            quote!(long = #kebab),
+                            quote!(required_unless_present_any = [#(#relax_lits),*]),
+                        ],
                     )
                 } else {
-                    (typed.clone(), Some(quote!(long = #kebab)))
+                    (typed.clone(), vec![quote!(long = #kebab)])
                 }
             }
-            (FieldKind::Flag, false) => (quote!(Option<#typed>), Some(quote!(long = #kebab))),
+            (FieldKind::Flag, false) => (quote!(Option<#typed>), vec![quote!(long = #kebab)]),
         }
     };
+
+    // `default_value` after `long` so `--help` reads naturally; the
+    // completion `add = …` last (it's the busiest token). clap shows the
+    // default as `[default: <v>]` in help automatically, so the doc
+    // string is left untouched.
+    if let Some(d) = default_attr {
+        attr_parts.push(d);
+    }
+    if let Some(c) = completion_attr {
+        attr_parts.push(c);
+    }
+    let arg_attr = if attr_parts.is_empty() {
+        None
+    } else {
+        Some(quote!(#(#attr_parts),*))
+    };
+
     Field {
         ident: field_ident,
         ty,
@@ -2881,6 +3024,152 @@ mod tests {
         assert!(
             !out.contains("Login"),
             "non-OAuth CLI must not emit a `Login` Cmd variant:\n{out}"
+        );
+    }
+
+    /// An IR with a single `listPets` op carrying two optional query
+    /// params: `status` (string enum with a `default`) and `limit`
+    /// (integer with a `default`). Drives the defaults + enum-completion
+    /// codegen without needing a full spec round-trip.
+    fn ir_with_defaulted_enum_query_param() -> Ir {
+        forge_plugin_sdk::serde_json::from_value(forge_plugin_sdk::serde_json::json!({
+            "info": {"title": "T", "version": "1"},
+            "servers": [],
+            "security_schemes": [],
+            // values[0] = "available" (status default), values[1] = 10 (limit default)
+            "values": [
+                {"kind": "string", "value": "available"},
+                {"kind": "int", "value": 10}
+            ],
+            "types": [
+                {
+                    "id": "PetStatus",
+                    "default": 0,
+                    "definition": {
+                        "def": "enum-string",
+                        "values": [{"value": "available"}, {"value": "inProgress"}, {"value": "sold"}]
+                    }
+                },
+                {
+                    "id": "LimitInt",
+                    "default": 1,
+                    "definition": {"def": "primitive", "kind": "integer", "constraints": {}}
+                }
+            ],
+            "operations": [{
+                "id": "listPets",
+                "method": "get",
+                "path_template": "/pets",
+                "query_params": [
+                    {"name": "status", "type": "PetStatus", "required": false},
+                    {"name": "limit", "type": "LimitInt", "required": false}
+                ]
+            }]
+        }))
+        .expect("defaulted-enum IR stub deserializes")
+    }
+
+    /// Scalar schema `default`s resolve to a clap `default_value` string;
+    /// compound / null defaults are skipped (clap's `default_value` is a
+    /// single token).
+    #[test]
+    fn param_default_value_handles_scalars() {
+        use forge_plugin_sdk::serde_json::json;
+        assert_eq!(
+            scalar_default_string(&json!("available")),
+            Some("available".into())
+        );
+        assert_eq!(scalar_default_string(&json!(10)), Some("10".into()));
+        assert_eq!(scalar_default_string(&json!(true)), Some("true".into()));
+        assert_eq!(scalar_default_string(&json!(null)), None);
+        assert_eq!(scalar_default_string(&json!([1, 2])), None);
+        assert_eq!(scalar_default_string(&json!({"a": 1})), None);
+
+        // End-to-end through the pool: PetStatus → "available", LimitInt → "10".
+        let ir = ir_with_defaulted_enum_query_param();
+        assert_eq!(
+            param_default_value(&ir, "PetStatus").as_deref(),
+            Some("available")
+        );
+        assert_eq!(param_default_value(&ir, "LimitInt").as_deref(), Some("10"));
+        assert_eq!(param_default_value(&ir, "Nonexistent"), None);
+    }
+
+    /// `enum_completion_attr` emits `ArgValueCandidates` listing every
+    /// enum value; non-enum types get no completion. Arrays unwrap one
+    /// level so repeated query params still complete each element.
+    #[test]
+    fn enum_completion_attr_lists_string_enum_values() {
+        let ir = ir_with_defaulted_enum_query_param();
+        let attr = enum_completion_attr(&ir, "PetStatus")
+            .expect("string enum yields completion candidates")
+            .to_string();
+        assert!(
+            attr.contains("ArgValueCandidates"),
+            "expected ArgValueCandidates:\n{attr}"
+        );
+        for v in ["available", "inProgress", "sold"] {
+            assert!(
+                attr.contains(&format!("\"{v}\"")),
+                "completion candidates must include `{v}`:\n{attr}"
+            );
+        }
+        // A primitive (non-enum) type gets nothing.
+        assert!(enum_completion_attr(&ir, "LimitInt").is_none());
+    }
+
+    /// A defaulted enum query param emits both a `default_value` and the
+    /// dynamic `ArgValueCandidates` completion, and — because the default
+    /// makes the flag non-required — drops any `required_unless_present_*`
+    /// gate. Pins the wiring `field_for_param` is responsible for.
+    #[test]
+    fn query_field_emits_default_and_completion() {
+        let ir = ir_with_defaulted_enum_query_param();
+        let op = &ir.operations[0];
+        let fields = collect_fields(&ir, op, None);
+        let rendered: String = fields
+            .iter()
+            .map(|f| field_to_tokens(f).to_string())
+            .collect();
+
+        // `status`: enum → String CLI field, default_value + completion.
+        assert!(
+            rendered.contains("status"),
+            "missing status field:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("default_value = \"available\""),
+            "status must carry its schema default:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("ArgValueCandidates"),
+            "enum query param must offer completion candidates:\n{rendered}"
+        );
+        // `limit`: integer default rendered as a string clap re-parses.
+        assert!(
+            rendered.contains("default_value = \"10\""),
+            "limit must carry its integer default as a string:\n{rendered}"
+        );
+    }
+
+    /// The `CompleteEnv` dynamic-completion dispatch is emitted even when
+    /// OAuth is inactive, so enum-valued query params' `ArgValueCandidates`
+    /// actually fire (`--status <TAB>`). Pre-defaults this only ran on
+    /// OAuth-active CLIs (for `--profile` completion).
+    #[test]
+    fn complete_env_emitted_without_oauth() {
+        let ir = ir_with_defaulted_enum_query_param();
+        let cfg = Config::default();
+        let main_rs =
+            emit_main_rs(&ir, &cfg, "petstore", None).expect("main.rs emits for a non-oauth spec");
+        assert!(
+            main_rs.contains("CompleteEnv"),
+            "non-OAuth CLI must still wire up dynamic shell completion:\n{main_rs}"
+        );
+        // And the enum query param's candidates ride along in the struct.
+        assert!(
+            main_rs.contains("ArgValueCandidates"),
+            "enum query param completion must reach the emitted main.rs:\n{main_rs}"
         );
     }
 }

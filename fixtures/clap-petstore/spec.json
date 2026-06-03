@@ -19,7 +19,19 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "schema": { "type": "integer", "format": "int32", "minimum": 1, "maximum": 100 }
+            "description": "How many items to return at one time (max 100).",
+            "schema": { "type": "integer", "format": "int32", "minimum": 1, "maximum": 100, "default": 10 }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only return pets with this status (enum query param: tab-completion + default).",
+            "schema": {
+              "type": "string",
+              "enum": ["available", "inProgress", "sold"],
+              "default": "available"
+            }
           }
         ],
         "responses": {
