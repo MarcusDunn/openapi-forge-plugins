@@ -17,7 +17,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.87.0"
@@ -33,7 +33,7 @@ jobs:
   build-plugins:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.87.0"
@@ -49,7 +49,7 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --target wasm32-wasip2 --all-targets -- -D warnings
       - name: Upload wasm artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/*.wasm
@@ -121,7 +121,7 @@ jobs:
             work_dir: compile-test
             cargo_cmd: test --no-fail-fast
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.87.0"
@@ -129,7 +129,7 @@ jobs:
         with:
           workspaces: "fixtures/${{ matrix.fixture }}/${{ matrix.work_dir }} -> target"
       - name: Download wasm artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: wasm-plugins
           path: target/wasm32-wasip2/release/
