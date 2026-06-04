@@ -207,6 +207,10 @@ impl<'a> Renderer<'a> {
             }
             TypeDef::Union(u) => self.render_union(u),
             TypeDef::Null => json!({ "type": "null" }),
+            // The JSON Schema "any" schema is the empty schema, which
+            // validates every instance. `{}` round-trips back to exactly
+            // that.
+            TypeDef::Any => json!({}),
         }
     }
 
