@@ -71,7 +71,11 @@ fn render_named(spec: &ir::Ir, named: &ir::NamedType) -> TokenStream {
         ir::TypeDef::Object(o) => render_struct(spec, &name, &docs, o),
         ir::TypeDef::EnumString(e) => render_string_enum(&name, &docs, e),
         ir::TypeDef::EnumInt(e) => render_int_enum(&name, &docs, e),
-        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) => {
+        // `Any` lowers to a `pub type #name = serde_json::Value;` alias,
+        // same shape as the primitive / array aliases (the use site
+        // inlines `serde_json::Value` regardless, so the alias only earns
+        // its keep when the schema is user-named — see `should_emit_named`).
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Any => {
             let rhs = type_ref_to_rust(spec, &named.id, &models_path_inside());
             quote! {
                 #docs
@@ -171,7 +175,9 @@ fn should_emit_named(named: &ir::NamedType) -> bool {
         ir::TypeDef::Object(o) => types::additional_properties_only(o).is_none(),
         ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) => true,
         ir::TypeDef::Union(_) => true,
-        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) => named.original_name.is_some(),
+        ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Any => {
+            named.original_name.is_some()
+        }
         ir::TypeDef::Null => false,
     }
 }

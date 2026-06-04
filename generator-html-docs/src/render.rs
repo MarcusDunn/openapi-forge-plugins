@@ -432,7 +432,7 @@ pub fn op_security_view(asset_prefix: &str, spec: &Ir, op: &Operation) -> Option
         (op.security.as_slice(), false)
     } else if !spec_doc_security_is_empty(spec) {
         // OAS expresses doc-level security on the Ir's root, but the
-        // current `forge-ir` 0.1.13 doesn't surface it as a dedicated
+        // current `forge-ir` 0.1.17 doesn't surface it as a dedicated
         // field. We mirror the behaviour by treating the *first*
         // operation that explicitly declares an empty `security: []`
         // override as "anonymous"; everything else inherits whichever
@@ -575,6 +575,7 @@ fn synthetic_display(spec: &Ir, asset_prefix: &str, t: &NamedType) -> String {
             kind.to_string()
         }
         TypeDef::Null => "null".to_string(),
+        TypeDef::Any => "any".to_string(),
         TypeDef::Object(_) => "object".to_string(),
         TypeDef::Array(a) => {
             let inner = render_typeref(spec, asset_prefix, &a.items);
@@ -622,9 +623,13 @@ fn build_inline_for(
     if !schema_filter::is_synthetic_id(&t.id) {
         return None;
     }
-    // Primitives and null have no structure to expand — the bare
-    // type display in the parent already says everything.
-    if matches!(t.definition, TypeDef::Primitive(_) | TypeDef::Null) {
+    // Primitives, null, and the freeform "any" schema have no structure
+    // to expand — the bare type display in the parent already says
+    // everything.
+    if matches!(
+        t.definition,
+        TypeDef::Primitive(_) | TypeDef::Null | TypeDef::Any
+    ) {
         return None;
     }
     Some(inline_schema_view(spec, asset_prefix, t, depth))
@@ -653,10 +658,10 @@ fn inline_schema_view(
         discriminator: None,
     };
     match &t.definition {
-        TypeDef::Primitive(_) | TypeDef::Null => {
+        TypeDef::Primitive(_) | TypeDef::Null | TypeDef::Any => {
             // Caller shouldn't ask for inline expansion on primitives /
-            // null, but be defensive: empty view means "nothing extra
-            // to show".
+            // null / any, but be defensive: empty view means "nothing
+            // extra to show".
         }
         TypeDef::Object(o) => {
             view.kind = "object";
@@ -759,6 +764,15 @@ pub fn render_typeref(spec: &Ir, asset_prefix: &str, tref: &TypeRef) -> TypeRefV
             }
             TypeDef::Null => TypeRefView {
                 display: "null".into(),
+                href: None,
+                is_link: false,
+            },
+            // The freeform "any" schema (`{}` / `true`) gets no dedicated
+            // page (see `schema_filter::is_user_facing`), so render it as a
+            // bare label rather than letting the wildcard arm below emit a
+            // link to a page we never wrote.
+            TypeDef::Any => TypeRefView {
+                display: "any".into(),
                 href: None,
                 is_link: false,
             },
@@ -1401,6 +1415,12 @@ pub fn schema_view(
         TypeDef::Null => {
             view.kind = "null";
         }
+        TypeDef::Any => {
+            // `is_user_facing` filters freeform "any" schemas out of page
+            // emission, so this arm is defensive — there's no structure to
+            // render beyond the kind label.
+            view.kind = "any";
+        }
     }
     view
 }
@@ -1927,6 +1947,7 @@ pub fn schemas_index_page(
                 TypeDef::Union(_) => "union",
                 TypeDef::Primitive(_) => "primitive",
                 TypeDef::Null => "null",
+                TypeDef::Any => "any",
             };
             let title = t.title.clone().unwrap_or_else(|| t.id.clone());
             let description_text = t

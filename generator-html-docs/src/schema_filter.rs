@@ -18,7 +18,10 @@ use forge_plugin_sdk::ir::{NamedType, TypeDef};
 /// True when this type deserves a dedicated `schemas/<id>.html` page.
 pub fn is_user_facing(t: &NamedType) -> bool {
     match &t.definition {
-        TypeDef::Primitive(_) | TypeDef::Null => return false,
+        // Primitives, null, and the freeform "any" schema carry no
+        // structure worth a dedicated page; they render inline as a bare
+        // label at every use site.
+        TypeDef::Primitive(_) | TypeDef::Null | TypeDef::Any => return false,
         _ => {}
     }
     !is_synthetic_id(&t.id)
