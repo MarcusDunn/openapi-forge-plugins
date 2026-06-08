@@ -1,0 +1,184 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="security-title">
+  <header>
+    <h1 id="security-title">Security</h1>
+    <p class="lede">Authentication schemes accepted by this API. Each operation lists the scheme(s) it requires; this page lists every scheme the spec declares.</p>
+  </header>
+
+  {% if schemes %}
+  {% for scheme in schemes %}
+  <section id="scheme-{{ scheme.id }}" aria-labelledby="scheme-{{ scheme.id }}-heading" data-scheme-id="{{ scheme.id }}" data-scheme-kind="{{ scheme.kind }}">
+    <h2 id="scheme-{{ scheme.id }}-heading">
+      <code>{{ scheme.id }}</code>
+      <small>({{ scheme.kind }})</small>
+      {% if scheme.deprecated %}<small class="badge-deprecated">deprecated</small>{% endif %}
+    </h2>
+    {% if scheme.description_html %}{{ scheme.description_html|safe }}{% endif %}
+
+    {% if scheme.kind == "api-key" %}
+    <dl class="scheme-detail">
+      <dt>Header / param name</dt>
+      <dd><code>{{ scheme.api_key_name }}</code></dd>
+      <dt>Location</dt>
+      <dd><code>{{ scheme.api_key_location }}</code></dd>
+    </dl>
+    {% elif scheme.kind == "http-basic" %}
+    <p>HTTP Basic authentication. Send <code>Authorization: Basic &lt;base64(user:pass)&gt;</code>.</p>
+    {% elif scheme.kind == "http-bearer" %}
+    <p>HTTP Bearer authentication. Send <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+    {% if scheme.bearer_format %}<p><small>Token format: <code>{{ scheme.bearer_format }}</code></small></p>{% endif %}
+    <form
+      class="auth-form"
+      data-auth-form
+      data-auth-kind="bearer"
+      data-scheme-id="{{ scheme.id }}"
+      onsubmit="return false;"
+      autocomplete="off">
+      <label>
+        Bearer token
+        <input
+          type="password"
+          data-auth-bearer-token
+          autocomplete="off"
+          placeholder="Paste a token">
+      </label>
+      <div class="auth-form__actions">
+        <button type="button" data-auth-bearer-save>Save</button>
+        <button type="button" data-auth-clear>Clear</button>
+        <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+      </div>
+      <p class="auth-form__hint"><small>Stored in <code>sessionStorage</code> for this tab only.</small></p>
+    </form>
+    {% elif scheme.kind == "mutual-tls" %}
+    <p>Mutual TLS. Provide a client certificate during the TLS handshake.</p>
+    {% elif scheme.kind == "oauth2" %}
+    {% if scheme.oauth2_flows %}
+    {% for flow in scheme.oauth2_flows %}
+    <section aria-labelledby="scheme-{{ scheme.id }}-flow-{{ flow.kind }}" data-flow="{{ flow.kind }}">
+      <h3 id="scheme-{{ scheme.id }}-flow-{{ flow.kind }}">OAuth 2.0 — <code>{{ flow.kind }}</code> flow</h3>
+      <dl class="scheme-detail">
+        {% if flow.authorization_url %}<dt>Authorization URL</dt><dd><a href="{{ flow.authorization_url }}"><code>{{ flow.authorization_url }}</code></a></dd>{% endif %}
+        {% if flow.token_url %}<dt>Token URL</dt><dd><a href="{{ flow.token_url }}"><code>{{ flow.token_url }}</code></a></dd>{% endif %}
+        {% if flow.refresh_url %}<dt>Refresh URL</dt><dd><a href="{{ flow.refresh_url }}"><code>{{ flow.refresh_url }}</code></a></dd>{% endif %}
+      </dl>
+      {% if flow.scopes %}
+      <h4>Scopes</h4>
+      <dl class="scopes">
+        {% for scope in flow.scopes %}
+        <dt><code>{{ scope.name }}</code></dt>
+        <dd>{{ scope.description }}</dd>
+        {% endfor %}
+      </dl>
+      {% endif %}
+      {% if flow.kind == "authorization-code" and flow.authorization_url and flow.token_url %}
+      <form
+        class="auth-form"
+        data-auth-form
+        data-auth-kind="oauth2-authorization-code"
+        data-scheme-id="{{ scheme.id }}"
+        data-authorization-url="{{ flow.authorization_url }}"
+        data-token-url="{{ flow.token_url }}"
+        {% if scheme.token_exchange %}
+        data-token-exchange-audience-template="{{ scheme.token_exchange.audience_template }}"
+        data-token-exchange-placeholder="{{ scheme.token_exchange.placeholder }}"
+        data-token-exchange-extra-scope="{{ scheme.token_exchange.extra_scope|join(' ') }}"
+        {% endif %}
+        onsubmit="return false;"
+        autocomplete="off">
+        {% if flow.scopes %}
+        <fieldset class="auth-form__scopes">
+          <legend>Scopes</legend>
+          {% for scope in flow.scopes %}
+          <label class="auth-form__scope">
+            <input type="checkbox" data-auth-scope value="{{ scope.name }}">
+            <code>{{ scope.name }}</code>
+            <small>{{ scope.description }}</small>
+          </label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
+        {% if scheme.token_exchange %}
+        <p class="auth-form__hint"><small>
+          This scheme advertises RFC 8693 token exchange. After login,
+          operations whose path includes
+          <code>{<wbr>{{ scheme.token_exchange.placeholder }}<wbr>}</code>
+          will mint a per-target token with audience
+          <code>{{ scheme.token_exchange.audience_template }}</code>
+          {% if scheme.token_exchange.extra_scope %}
+          (scope: {% for s in scheme.token_exchange.extra_scope %}<code>{{ s }}</code>{% if not loop.last %} {% endif %}{% endfor %})
+          {% endif %}.
+        </small></p>
+        {% endif %}
+        <div class="auth-form__actions">
+          <button type="button" data-auth-pkce-login>Login</button>
+          <button type="button" data-auth-clear>Sign out</button>
+          <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+        </div>
+        <p class="auth-form__hint"><small>
+          Opens the IdP's authorization page in a popup. The popup
+          redirects to <code>auth/callback.html</code> — register
+          <strong><span data-auth-pkce-redirect-uri></span></strong>
+          (this docs site's URL plus that path) with your IdP as an
+          allowed redirect URI for the configured client. Tokens
+          live in <code>sessionStorage</code>.
+        </small></p>
+      </form>
+      {% endif %}
+      {% if flow.kind == "client-credentials" and flow.token_url %}
+      <form
+        class="auth-form"
+        data-auth-form
+        data-auth-kind="oauth2-client-credentials"
+        data-scheme-id="{{ scheme.id }}"
+        data-token-url="{{ flow.token_url }}"
+        onsubmit="return false;"
+        autocomplete="off">
+        <label>
+          Client ID
+          <input type="text" data-auth-client-id autocomplete="off" placeholder="client id">
+        </label>
+        <label>
+          Client secret
+          <input type="password" data-auth-client-secret autocomplete="off" placeholder="client secret">
+        </label>
+        {% if flow.scopes %}
+        <fieldset class="auth-form__scopes">
+          <legend>Scopes</legend>
+          {% for scope in flow.scopes %}
+          <label class="auth-form__scope">
+            <input type="checkbox" data-auth-scope value="{{ scope.name }}">
+            <code>{{ scope.name }}</code>
+            <small>{{ scope.description }}</small>
+          </label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
+        <div class="auth-form__actions">
+          <button type="button" data-auth-oauth-request>Request token</button>
+          <button type="button" data-auth-clear>Clear</button>
+          <span class="auth-form__status" data-auth-status role="status" aria-live="polite"></span>
+        </div>
+        <p class="auth-form__hint"><small>
+          Browser-only — do not embed real production secrets. Tokens
+          live in <code>sessionStorage</code> for this tab and clear
+          when you close it. Token requests are subject to the same
+          CORS rules as the rest of the Try-it flow; if your IdP
+          doesn't allow this origin, get a token elsewhere and paste
+          it into a temporary Bearer scheme instead.
+        </small></p>
+      </form>
+      {% endif %}
+    </section>
+    {% endfor %}
+    {% endif %}
+    {% elif scheme.kind == "open-id-connect" %}
+    <p>OpenID Connect. Discovery document: <a href="{{ scheme.open_id_connect_url }}"><code>{{ scheme.open_id_connect_url }}</code></a></p>
+    {% endif %}
+  </section>
+  {% endfor %}
+  {% else %}
+  <p><em>This API declares no security schemes.</em></p>
+  {% endif %}
+</article>
+{% endblock %}

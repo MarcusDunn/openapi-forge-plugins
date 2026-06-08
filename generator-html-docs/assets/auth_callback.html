@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Authenticating…</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; padding: 2rem; color: #1c1d22; }
+    .err { color: #cf222e; white-space: pre-wrap; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Authenticating…</h1>
+  <p data-status>Talking to the IdP and notifying the docs window.</p>
+  <pre data-err class="err" hidden></pre>
+  <script>
+  (function () {
+    function setStatus(s) { document.querySelector("[data-status]").textContent = s; }
+    function setError(e) {
+      var el = document.querySelector("[data-err]");
+      el.hidden = false;
+      el.textContent = e;
+    }
+
+    var params = new URL(window.location.href).searchParams;
+    var code = params.get("code");
+    var state = params.get("state");
+    var err = params.get("error");
+
+    var opener = window.opener;
+    function postBack(payload) {
+      if (opener) {
+        opener.postMessage(
+          Object.assign({ source: "openapi-forge-auth-callback" }, payload),
+          window.location.origin
+        );
+      }
+    }
+
+    if (err) {
+      setError("IdP returned: " + err + (params.get("error_description") ? "\n" + params.get("error_description") : ""));
+      postBack({ ok: false, state: state, error: err, error_description: params.get("error_description") });
+      return;
+    }
+    if (!code || !state) {
+      setError("Missing `code` or `state` parameter. The IdP did not complete the redirect correctly.");
+      postBack({ ok: false, state: state || null, error: "missing_params" });
+      return;
+    }
+
+    setStatus("Got authorization code. Returning to docs window…");
+    postBack({ ok: true, state: state, code: code });
+    // Give the opener a tick to receive the message, then close.
+    setTimeout(function () { try { window.close(); } catch (e) {} }, 250);
+  })();
+  </script>
+</body>
+</html>

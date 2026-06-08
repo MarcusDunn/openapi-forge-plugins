@@ -71,6 +71,10 @@ fn render_named(spec: &ir::Ir, named: &ir::NamedType) -> TokenStream {
         ir::TypeDef::Object(o) => render_struct(spec, &name, &docs, o),
         ir::TypeDef::EnumString(e) => render_string_enum(&name, &docs, e),
         ir::TypeDef::EnumInt(e) => render_int_enum(&name, &docs, e),
+        // `Any` lowers to a `pub type #name = serde_json::Value;` alias,
+        // same shape as the primitive / array aliases (the use site
+        // inlines `serde_json::Value` regardless, so the alias only earns
+        // its keep when the schema is user-named — see `should_emit_named`).
         ir::TypeDef::Primitive(_) | ir::TypeDef::Array(_) | ir::TypeDef::Any => {
             let rhs = type_ref_to_rust(spec, &named.id, &models_path_inside());
             quote! {
@@ -157,7 +161,7 @@ fn unique_variant_names(spec: &ir::Ir, u: &ir::UnionType) -> Vec<String> {
 }
 
 /// Decide whether a `NamedType` earns its keep as a definition in
-/// `models.rs`. Synthesized per-property *primitive / array / any* aliases
+/// `models.rs`. Synthesized per-property *primitive / array* aliases
 /// (their `original_name` is `None`) are parser bookkeeping — the use
 /// site inlines the same expression — so they get filtered out.
 ///

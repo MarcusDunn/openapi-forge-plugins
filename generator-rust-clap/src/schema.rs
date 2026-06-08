@@ -207,8 +207,9 @@ impl<'a> Renderer<'a> {
             }
             TypeDef::Union(u) => self.render_union(u),
             TypeDef::Null => json!({ "type": "null" }),
-            // The "any" schema accepts every instance; the empty schema
-            // `{}` is its canonical JSON Schema form (equivalent to `true`).
+            // The JSON Schema "any" schema is the empty schema, which
+            // validates every instance. `{}` round-trips back to exactly
+            // that.
             TypeDef::Any => json!({}),
         }
     }

@@ -1,0 +1,67 @@
+{# Recursively renders an InlineSchemaView. Caller sets `inline` and
+   includes this partial inside a <details>. Templates wrap the
+   include themselves so the surrounding markup (depth styling,
+   <details>/<summary>) stays with the call site. #}
+{% if inline %}
+  {% if inline.description_html %}{{ inline.description_html|safe }}{% endif %}
+
+  {% if inline.kind == "object" %}
+    {% if inline.properties %}
+    <dl class="inline-properties">
+      {% for p in inline.properties %}
+      <dt data-property="{{ p.name }}">
+        <code>{{ p.name }}</code>
+        <small>({% if p.required %}required{% else %}optional{% endif %}{% if p.deprecated %}, deprecated{% endif %})</small>
+        {% set t = p.type %}{% include "partials/_typeref.html.j2" %}
+      </dt>
+      <dd>
+        {% if p.description_html %}{{ p.description_html|safe }}{% endif %}
+        {% if p.inline %}
+        <details class="inline-nested">
+          <summary>structure</summary>
+          {% set inline = p.inline %}{% include "partials/_inline_schema.html.j2" %}
+        </details>
+        {% endif %}
+      </dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+    <p><small>
+      {% if inline.additional_properties_kind == "forbidden" %}
+        Additional properties: <strong>forbidden</strong>.
+      {% elif inline.additional_properties_kind == "any" %}
+        Additional properties: allowed (any type) — this is a free-form object.
+      {% elif inline.additional_properties_kind == "typed" %}
+        Additional properties typed as {% set t = inline.additional_properties_type %}{% include "partials/_typeref.html.j2" %}.
+      {% endif %}
+    </small></p>
+    {% if not inline.properties and inline.additional_properties_kind != "any" and inline.additional_properties_kind != "typed" %}
+    <p><em>(object with no documented properties)</em></p>
+    {% endif %}
+
+  {% elif inline.kind == "array" %}
+    <p>Array of {% set t = inline.items %}{% include "partials/_typeref.html.j2" %}.</p>
+    {% if inline.items_inline %}
+    <details class="inline-nested">
+      <summary>item structure</summary>
+      {% set inline = inline.items_inline %}{% include "partials/_inline_schema.html.j2" %}
+    </details>
+    {% endif %}
+
+  {% elif inline.kind == "enum-string" or inline.kind == "enum-int" %}
+    <p>One of:</p>
+    <ul class="enum-values">
+      {% for v in inline.enum_values %}<li><code>{{ v }}</code></li>{% endfor %}
+    </ul>
+
+  {% elif inline.kind == "union" %}
+    {% set discriminator = inline.discriminator %}
+    {% include "partials/_discriminator.html.j2" %}
+    <p>{{ inline.union_kind }}:</p>
+    <ul class="union-variants">
+      {% for v in inline.union_variants %}
+      <li>{% set t = v %}{% include "partials/_typeref.html.j2" %}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+{% endif %}

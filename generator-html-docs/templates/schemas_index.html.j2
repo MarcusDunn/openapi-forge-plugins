@@ -1,0 +1,44 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<article aria-labelledby="schemas-title">
+  <header>
+    <h1 id="schemas-title">Schemas</h1>
+    <p class="lede">Every named type declared by this API ({{ entries|length }} schemas).</p>
+    <label class="schemas-filter">
+      Filter:
+      <input type="search" id="schemas-filter-input" placeholder="schema name…" autocomplete="off">
+    </label>
+  </header>
+
+  <ul class="schemas-list" id="schemas-list">
+    {% for e in entries %}
+    <li
+      data-schema-id="{{ e.id }}"
+      data-schema-kind="{{ e.kind }}"
+      data-schema-search="{{ e.id|lower }} {{ e.title|lower }}">
+      <a href="{{ e.href|safe }}">
+        <code class="schema-title">{{ e.title }}</code>
+        <span class="schema-kind-badge schema-kind-{{ e.kind }}">{{ e.kind }}</span>
+        {% if e.deprecated %}<small class="badge-deprecated">deprecated</small>{% endif %}
+      </a>
+      {% if e.description_text %}<p class="schema-desc">{{ e.description_text }}</p>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <script>
+    (function() {
+      var input = document.getElementById('schemas-filter-input');
+      var list = document.getElementById('schemas-list');
+      if (!input || !list) return;
+      input.addEventListener('input', function() {
+        var q = input.value.trim().toLowerCase();
+        for (var li of list.children) {
+          var hay = li.dataset.schemaSearch || '';
+          li.hidden = q && !hay.includes(q);
+        }
+      });
+    })();
+  </script>
+</article>
+{% endblock %}

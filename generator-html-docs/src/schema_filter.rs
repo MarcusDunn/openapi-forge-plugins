@@ -18,9 +18,9 @@ use forge_plugin_sdk::ir::{NamedType, TypeDef};
 /// True when this type deserves a dedicated `schemas/<id>.html` page.
 pub fn is_user_facing(t: &NamedType) -> bool {
     match &t.definition {
-        // Trivial leaf types render inline at their use sites (see
-        // `render::render_typeref`); a dedicated page would be near-empty and
-        // is never linked to.
+        // Primitives, null, and the freeform "any" schema carry no
+        // structure worth a dedicated page; they render inline as a bare
+        // label at every use site.
         TypeDef::Primitive(_) | TypeDef::Null | TypeDef::Any => return false,
         _ => {}
     }

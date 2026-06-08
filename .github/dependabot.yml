@@ -1,0 +1,25 @@
+# Dependabot keeps the *plugin* workspace's `Cargo.toml` files and the
+# GitHub Actions workflow versions fresh. It does NOT touch the version
+# strings emitted into the *generated* CLI's `Cargo.toml` — those live as
+# string literals inside `generator-rust-clap/src/emit.rs` and have to be
+# bumped by hand (or by a custom workflow) when downstream crates ship
+# breaking versions.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      rust-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      gh-actions:
+        patterns: ["*"]

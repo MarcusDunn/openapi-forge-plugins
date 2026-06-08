@@ -147,3 +147,46 @@ fn handlers_receive_pre_match_clones_not_cli_borrow() {
         );
     }
 }
+
+/// Schema `default`s flow into clap `default_value`s. The `listPets`
+/// op declares `limit` (integer, `default: 10`) and `status` (string
+/// enum, `default: "available"`) as query params; both must surface so
+/// users get the server's default without typing the flag, and `--help`
+/// shows it. clap re-parses the string through each field's value
+/// parser (`"10"` → `i32`, `"available"` → the `serde_json` decode).
+#[test]
+fn query_param_defaults_become_clap_default_values() {
+    assert!(
+        MAIN_RS.contains("default_value = \"10\""),
+        "expected `limit`'s schema default (10) as a clap default_value in main.rs"
+    );
+    assert!(
+        MAIN_RS.contains("default_value = \"available\""),
+        "expected `status`'s schema default (\"available\") as a clap default_value in main.rs"
+    );
+}
+
+/// Enum-valued query params expose their allowed values as dynamic
+/// shell-completion candidates (`--status <TAB>` → available / inProgress
+/// / sold). Requires both the per-arg `ArgValueCandidates` wiring and the
+/// `CompleteEnv` runtime dispatch — the latter is now emitted
+/// unconditionally (this fixture has no OAuth), where it used to be
+/// gated behind OAuth profile completion.
+#[test]
+fn enum_query_param_offers_completion_candidates() {
+    assert!(
+        MAIN_RS.contains("ArgValueCandidates"),
+        "expected `status` enum query param to register ArgValueCandidates in main.rs"
+    );
+    for v in ["available", "inProgress", "sold"] {
+        assert!(
+            MAIN_RS.contains(&format!("CompletionCandidate::new(\"{v}\")")),
+            "expected enum completion candidate `{v}` in main.rs"
+        );
+    }
+    assert!(
+        MAIN_RS.contains("CompleteEnv::with_factory"),
+        "dynamic completion dispatch (CompleteEnv) must be wired up even without OAuth, \
+         otherwise the enum ArgValueCandidates never fire"
+    );
+}

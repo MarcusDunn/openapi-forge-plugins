@@ -50,17 +50,18 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             //
             // The two cases pick different Rust shapes:
             //  - Typed{T} → `HashMap<String, T>` (keys arbitrary, values
-            //    are a known schema). A bare `additionalProperties: {}`
-            //    lands here with `T` resolving to `serde_json::Value` (the
-            //    `{}` value schema now lowers to `TypeDef::Any`), giving
-            //    `HashMap<String, serde_json::Value>`.
-            //  - Any      → `serde_json::Value`. This is the boolean
-            //    `additionalProperties: true` form: an object whose values
-            //    carry *no* schema constraint. `Value` accepts every wire
-            //    shape the IR permits here, where a `HashMap<String, T>`
-            //    has no value type to name. (A bare `{}` *whole* schema —
-            //    equivalent to `true` under JSON Schema 2020-12 — lowers to
-            //    the dedicated `TypeDef::Any`; see its arm below.)
+            //    are a known schema).
+            //  - Any      → `serde_json::Value`. `additionalProperties:
+            //    true` (and `: {}`) lowers to this in-object freeform
+            //    position as `Object{props:[], AP=Any}` — distinct from a
+            //    standalone freeform schema, which the IR now carries as
+            //    its own `TypeDef::Any` (handled below). That shape
+            //    carries *no* constraint that values be objects — a
+            //    string or number on the wire is just as valid — so a
+            //    `HashMap<String, Value>` would over-restrict and reject
+            //    those wires at deserialize time. `Value` is the only
+            //    Rust type that faithfully accepts everything the IR says
+            //    is permitted here.
             if let Some(value_ty) = additional_properties_only(o) {
                 return match value_ty {
                     AdditionalMapValue::Typed(t) => {
@@ -115,12 +116,13 @@ pub fn type_ref_to_rust(spec: &ir::Ir, type_ref: &str, models_path: &ModelsPath)
             ));
             quote! { serde_json::Value }
         }
-        // The JSON Schema "any" schema (`{}` or `true`): validates any
-        // instance — object, array, string, number, bool, or null. The only
-        // Rust type that accepts everything the IR permits is `Value`. This is
-        // also the value type a bare `additionalProperties: {}` map resolves
-        // to, which is how a permissive map renders as
-        // `HashMap<String, serde_json::Value>`.
+        // The JSON Schema "any" schema (`{}` / `true`) validates *any*
+        // instance — object, array, string, number, bool, or null. The
+        // only Rust type that faithfully accepts all of those at
+        // deserialize time is `serde_json::Value`. (Same target as the
+        // permissive `additionalProperties` map above, reached here when
+        // the IR carries the freeform shape as a top-level type rather
+        // than an `Object{AP=Any}`.)
         ir::TypeDef::Any => quote! { serde_json::Value },
     }
 }
