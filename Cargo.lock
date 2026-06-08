@@ -61,9 +61,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "forge-ir"
-version = "0.1.17"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d066c65bf32134b50ff7d578efd4d8b4cc218a15017ecf7b704e915b7e9de9c9"
+checksum = "7fe941aafa1723c187c697119f49586f48d49afeb3f1ec7edf690fa02942275b"
 dependencies = [
  "indexmap",
  "serde",
@@ -71,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "forge-plugin-sdk"
-version = "0.1.17"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5c128fdc6b2eb0a0c934f7adb72de3a553ad93919935a2f33a33824545ae3ad"
+checksum = "2c4b8950651d4a909aa3d75c38f220403d160c71425c12e138d1ca0b96578237"
 dependencies = [
  "forge-ir",
  "serde",

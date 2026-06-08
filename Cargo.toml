@@ -35,7 +35,7 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/MarcusDunn/openapi-forge-plugins"
 
 [workspace.dependencies]
-forge-plugin-sdk = "0.1.17"
+forge-plugin-sdk = "0.1.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
