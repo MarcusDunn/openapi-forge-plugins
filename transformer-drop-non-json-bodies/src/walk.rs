@@ -67,6 +67,9 @@ pub fn seed_from_definition(def: &ir::TypeDef, queue: &mut VecDeque<String>) {
                 queue.push_back(variant.r#type.clone());
             }
         }
-        ir::TypeDef::EnumString(_) | ir::TypeDef::EnumInt(_) | ir::TypeDef::Null => {}
+        ir::TypeDef::EnumString(_)
+        | ir::TypeDef::EnumInt(_)
+        | ir::TypeDef::Null
+        | ir::TypeDef::Any => {}
     }
 }

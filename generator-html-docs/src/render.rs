@@ -217,6 +217,13 @@ pub fn render_typeref(spec: &Ir, asset_prefix: &str, tref: &TypeRef) -> TypeRefV
                 href: None,
                 is_link: false,
             },
+            // The "any" schema (`{}` / `true`) has no dedicated page; render
+            // it inline as the same `any` label the empty-ref case uses above.
+            TypeDef::Any => TypeRefView {
+                display: "any".into(),
+                href: None,
+                is_link: false,
+            },
             _ => {
                 let label = t.title.as_deref().unwrap_or(t.id.as_str()).to_owned();
                 if schema_filter::is_synthetic_id(&t.id) {
@@ -665,6 +672,9 @@ pub fn schema_view(
         TypeDef::Null => {
             view.kind = "null";
         }
+        TypeDef::Any => {
+            view.kind = "any";
+        }
     }
     view
 }
@@ -748,11 +758,7 @@ pub fn build_used_in_index(spec: &Ir) -> UsedInIndex {
     index
 }
 
-fn used_in_links(
-    spec: &Ir,
-    asset_prefix: &str,
-    op_ids: BTreeSet<&String>,
-) -> Vec<OperationLink> {
+fn used_in_links(spec: &Ir, asset_prefix: &str, op_ids: BTreeSet<&String>) -> Vec<OperationLink> {
     let mut out = Vec::new();
     for op in &spec.operations {
         if !op_ids.contains(&op.id) {
