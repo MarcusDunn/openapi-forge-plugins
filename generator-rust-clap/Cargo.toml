@@ -17,8 +17,8 @@ forge-plugin-sdk = { workspace = true, features = ["generator"] }
 serde = { workspace = true }
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "parsing"] }
-prettyplease = "0.2"
+syn = { version = "3", features = ["full", "parsing"] }
+prettyplease = "0.3"
 
 [lints.rust]
 unsafe_code = "deny"
